@@ -1,104 +1,118 @@
 # Advisor Appointment Scheduler (Voice Agent)
 
-> A Next.js app that chats with users to help them book advisor consultation slots. It uses an AI (Groq) for conversation, optional Google Calendar and Sheets for real scheduling, and a planned path to browser voice later.
+> A Next.js app that chats with users to help them book advisor consultation slots. It uses an AI ([Groq](https://groq.com/)) for conversation, optional Google Calendar and Sheets for real scheduling, and a planned path to browser voice later.
 
-This repo is **Next Leap — Milestone 3** work. The full system design lives in [Docs/architecture.md](./Docs/architecture.md) (see §14 for phases).
+**Who it’s for:** Developers and learners following the **Next Leap** voice-agent milestone; anyone who wants a working example of a guarded LLM chat plus optional MCP-backed scheduling.
+
+Design details, phases, and ADRs: [Docs/architecture.md](./Docs/architecture.md) (see §14).
 
 ## What is this?
 
-Visitors talk (today: **type**) with an assistant that figures out what they want (new booking, reschedule, etc.), stays within guardrails (no investment advice, no collecting sensitive personal data in chat), and can offer real time slots when Google is connected. After a booking, a separate flow can collect contact details safely (Phase 3).
+Imagine a friend opens a website and types to an assistant instead of calling a call center. The assistant figures out whether they want a new booking, a reschedule, or something else, stays within rules (no investment advice, no collecting sensitive personal details in the chat), and can offer real calendar slots when Google is connected. After a booking, a **separate** page collects contact information safely so private data is not mixed into the open-ended AI conversation.
+
+This repository is **Next Leap — Milestone 3** coursework; the architecture doc above is the source of truth for how pieces fit together.
 
 ## Features
 
-- **Text chat agent** at `/agent` — powered by [Groq](https://groq.com/) (OpenAI-compatible API); works in a limited **offline** mode without an API key for local smoke tests.
-- **Conversation engine** — intents, topic and time preference, disclaimer on the first assistant reply, PII and advice guardrails.
-- **Optional live scheduling (Phase 2)** — MCP server talks to Google Calendar and Sheets; the Next.js app only uses an MCP client (no `googleapis` in the web app for those flows).
-- **Post-call PII (Phase 3)** — booking code + secure link; form and APIs under `app/booking/` and `phase-3-post-call-pii/`.
+- Text chat agent at `/agent` — powered by Groq (OpenAI-compatible API); a small **offline** mode works without an API key for local smoke tests.
+- Conversation engine — intents, topic and time preference, disclaimer on the first assistant reply, PII and advice guardrails.
+- Optional live scheduling (Phase 2) — an MCP server talks to Google Calendar and Sheets; the Next.js app uses an MCP client only (no `googleapis` in the web app for those flows).
+- Post-call PII (Phase 3) — booking code plus secure link; form and APIs live under `app/booking/` and `phase-3-post-call-pii/`.
 
-## Built with
+## Built With
 
-- [Next.js 14](https://nextjs.org/) (App Router) — UI and API routes
-- [Groq](https://console.groq.com/) — fast LLM inference via the [OpenAI Node SDK](https://github.com/openai/openai-node) (`baseURL` pointed at Groq)
+- [Next.js 14](https://nextjs.org/) — UI and API routes (App Router)
+- [Groq](https://console.groq.com/) — LLM inference via the [OpenAI Node SDK](https://github.com/openai/openai-node) with `baseURL` set to Groq’s API
 - [Model Context Protocol](https://modelcontextprotocol.io/) — `@modelcontextprotocol/sdk` for the scheduling server
 - [TypeScript](https://www.typescriptlang.org/) and [Zod](https://zod.dev/) — types and validation
 
-## Getting started
+## Getting Started
 
-These steps run the **web app** on your computer. You need [Node.js](https://nodejs.org/) **18 or newer** (Node 20 LTS is a good choice). Check with:
+These instructions help you run a copy of this project on your own computer.
+
+### Prerequisites
+
+You need **[Node.js](https://nodejs.org/) version 18 or higher** (version 20 LTS is a good default). Node includes `npm`, which installs JavaScript dependencies.
+
+Check that Node is installed and see the version number:
 
 ```bash
 node --version
 ```
 
-### 1. Get the code
+You also need a **[Groq API key](https://console.groq.com/keys)** for full AI responses. The app can still start without it using a limited offline stub.
 
-Clone the repository and enter the project folder (this is the folder that contains `package.json`):
+### Installation
 
-```bash
-git clone https://github.com/sonal-dks/Voice-Agent.git
-cd Voice-Agent
-```
+Follow these steps in order. Each step uses the terminal: the **repository root** is the folder that contains `package.json` (after you clone, that folder is named `Voice-Agent`).
 
-### 2. Install dependencies
+1. **Clone the repository** — downloads the project from GitHub and creates a local folder.
 
-`npm` downloads the libraries the app needs:
+   ```bash
+   git clone https://github.com/sonal-dks/Voice-Agent.git
+   cd Voice-Agent
+   ```
 
-```bash
-npm install
-```
+2. **Install dependencies** — `npm` reads `package.json` and downloads packages into `node_modules/`.
 
-### 3. Environment variables
+   ```bash
+   npm install
+   ```
 
-Copy the example env file. The Next.js config loads **`.env`** from the **repo root**:
+3. **Set up environment variables** — copy the example file to `.env`. Next.js loads `.env` from the repo root (see `next.config.mjs`).
 
-```bash
-cp .env.example .env
-```
+   ```bash
+   cp .env.example .env
+   ```
 
-Open `.env` in an editor and add at least:
+   Open `.env` in a text editor. Add at least:
 
-- **`GROQ_API_KEY`** — from [Groq Console → API Keys](https://console.groq.com/keys) (free tier). Without it, the server uses a small offline stub so you can still run smoke tests.
-- **`GROQ_MODEL`** — optional; defaults are documented in `.env.example`.
+   - **`GROQ_API_KEY`** — create a key in the [Groq Console](https://console.groq.com/keys). Without it, the chat uses an offline stub.
+   - **`GROQ_MODEL`** — optional; defaults are documented in `.env.example`.
 
-For **live Calendar/Sheets booking** (Phase 2), you also need the `GOOGLE_*` variables — see [phase-2-scheduling-core/README.md](./phase-2-scheduling-core/README.md).
+   For **live Calendar and Sheets** (Phase 2), add the `GOOGLE_*` variables described in [phase-2-scheduling-core/README.md](./phase-2-scheduling-core/README.md).
 
-### 4. Start the dev server
+4. **Run the development server** — starts the Next.js dev server with hot reload.
 
-```bash
-npm run dev
-```
+   ```bash
+   npm run dev
+   ```
 
-### 5. Open the app
+5. **Open the app in your browser** — the dev server listens on port 3000 by default.
 
-In your browser go to:
+   - Home: [http://localhost:3000](http://localhost:3000)
+   - Chat agent: [http://localhost:3000/agent](http://localhost:3000/agent)
 
-- **Home:** [http://localhost:3000](http://localhost:3000)
-- **Chat agent:** [http://localhost:3000/agent](http://localhost:3000/agent)
+6. **(Optional) Run the Phase 1 smoke test** — with `npm run dev` still running, open a second terminal in the same repo root. This script checks that the health and message endpoints respond.
 
-### 6. (Optional) Smoke test the API
-
-With the dev server running, from another terminal:
-
-```bash
-npm run test:phase1
-```
+   ```bash
+   npm run test:phase1
+   ```
 
 ### Production build
+
+To build and run like production (after `npm run build`, `next start` serves the optimized app):
 
 ```bash
 npm run build
 npm start
 ```
 
-## How to use
+## How to Use
 
-1. Open **`/agent`**, type a message, and use the same **session** across turns (the UI stores `sessionId` from the API).
-2. To verify the backend quickly, call **`GET /api/health`** — you should see a healthy status JSON.
+1. Go to **`/agent`**, type messages, and keep using the same chat **session** so follow-up turns make sense — the UI stores `sessionId` returned by the API.
+2. Check that the server is up: open or request **`GET /api/health`** — you should get JSON with a healthy status.
 
-## Project structure
+Example health check from a terminal (with the dev server running):
+
+```bash
+curl -s http://localhost:3000/api/health
+```
+
+## Project Structure
 
 ```
-Voice-Agent/                 # Next.js app root
+Voice-Agent/
 ├── app/                     # Pages and Route Handlers
 │   ├── agent/               # Chat UI
 │   ├── booking/             # PII flow (Phase 3)
@@ -108,7 +122,7 @@ Voice-Agent/                 # Next.js app root
 ├── phase-1-text-agent/      # Phase 1 docs (tests, evals, outputs)
 ├── phase-2-scheduling-core/ # MCP server + Google integration
 ├── phase-3-post-call-pii/   # PII libraries and form
-├── .env.example             # Copy to .env — never commit .env
+├── .env.example             # Copy to .env — do not commit real secrets
 └── package.json
 ```
 
@@ -124,16 +138,18 @@ Voice-Agent/                 # Next.js app root
 
 ## Contributing
 
+Contributions are welcome.
+
 1. Fork the repository on GitHub.
-2. Create a branch for your change: `git checkout -b feature/your-feature`
-3. Commit with a clear message: `git commit -m "Describe your change"`
+2. Create a branch: `git checkout -b feature/your-feature`
+3. Commit your changes: `git commit -m "Describe your change"`
 4. Push the branch: `git push origin feature/your-feature`
-5. Open a Pull Request against the main branch.
+5. Open a Pull Request against the `main` branch.
 
 ## License
 
-This repository does not include a `LICENSE` file yet. Add one (for example MIT or Apache-2.0) when you decide how you want others to use the code.
+This repository does not include a `LICENSE` file yet. When you publish how others may use the code, add a license file (for example MIT or Apache-2.0) at the repo root and update this section to link to it.
 
 ## Questions?
 
-Open an issue on [github.com/sonal-dks/Voice-Agent](https://github.com/sonal-dks/Voice-Agent/issues).
+Have a question? [Open an issue](https://github.com/sonal-dks/Voice-Agent/issues).

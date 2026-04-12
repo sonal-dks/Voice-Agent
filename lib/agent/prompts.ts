@@ -1,5 +1,5 @@
 /**
- * System instruction + tool declarations for Gemini (Phase 1–2 — text agent + scheduling).
+ * System instruction + tools for Groq (OpenAI-compatible chat + tool calling).
  * @see Docs/low-level-architecture.md
  */
 
@@ -44,4 +44,5 @@ For check_availability: treat like book_new — you need topic and day, then off
 Use **detect_intent** when the user's goal is unclear or at the start of a new task.
 
 Keep replies concise unless listing the 5 topics (use a clear list).
-Use the **offer_slots** and **confirm_booking** tools for real calendar scheduling — do not invent specific slot times without calling offer_slots.`;
+Use the **offer_slots** and **confirm_booking** tools for real calendar scheduling — do not invent specific slot times without calling offer_slots.
+Tool calls use the standard function/tool API exposed by the Groq OpenAI-compatible endpoint.`;

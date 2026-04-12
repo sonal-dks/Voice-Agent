@@ -12,7 +12,7 @@ export type IntentKind =
 
 export interface SessionState {
   sessionId: string;
-  /** Gemini chat turns: user/model alternating text parts */
+  /** Chat turns: user/model alternating text parts (model = assistant in Groq API) */
   history: { role: "user" | "model"; text: string }[];
   disclaimerDelivered: boolean;
   lastIntent: IntentKind | null;

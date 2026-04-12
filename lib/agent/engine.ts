@@ -38,7 +38,7 @@ function toDto(s: SessionState): MessageDTO[] {
 
 /**
  * Client holds the visible transcript; server memory is in-process only (lost on
- * serverless cold starts). Rebuild `session.history` from the client so Gemini
+ * serverless cold starts). Rebuild `session.history` from the client so the LLM
  * still sees prior turns.
  */
 function applyClientTranscript(

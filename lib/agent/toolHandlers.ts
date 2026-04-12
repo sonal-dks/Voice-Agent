@@ -6,7 +6,7 @@ import {
 import type { OfferedSlot } from "@/lib/mcp/schedulingTypes";
 import type { IntentKind, SessionState } from "./state";
 
-/** Never pass secure_link_token back to Gemini (logs / model context). */
+/** Never pass secure_link_token back to the LLM (logs / model context). */
 function redactSecureLinkTokenForLlm(
   raw: Record<string, unknown>
 ): Record<string, unknown> {

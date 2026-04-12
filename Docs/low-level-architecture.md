@@ -7,7 +7,7 @@
 
 **Phase 1 → 2 → 3 → 4** — **section headings below match this order:**
 
-1. **Phase 1 — Text ↔ text** — Web Agent UI + Agent API + Conversation Engine + Gemini (no STT/TTS, no Twilio).
+1. **Phase 1 — Text ↔ text** — Web Agent UI + Agent API + Conversation Engine + **Groq** LLM (no STT/TTS, no Twilio).
 2. **Phase 2 — MCP** — **[FastMCP](https://gofastmcp.com/getting-started/welcome)** in **`phase-2-scheduling-core/`**. **Two real Calendar slots**, **Calendar hold**, **Bookings** + **Advisor Pre-Bookings**, advisor **Gmail draft**, **`submit_pii_booking`** — **all only via MCP tools**. Next.js = **MCP client** only; **`googleapis` only in the MCP server process.**
 3. **Phase 3 — Post-call PII** — Secondary UI + encrypted row + dual email via MCP; [`phase-3-post-call-pii/`](../phase-3-post-call-pii/).
 4. **Phase 4 — Browser STT + TTS** — Same UI + engine; Deepgram + ElevenLabs; future work in `lib/voice/`, `app/api/agent/stream/`. **No Twilio.**
@@ -41,7 +41,7 @@ These two documents are coupled. Any change to one must be reflected in the othe
 - **Document & build order:** 1 → 2 → 3 → 4 (see [architecture.md §14](./architecture.md#14-implementation-phases))
 - Test case IDs: `TC-{phase}-{seq}`, `TC-{phase}-F{seq}` (legacy IDs in repo may not match phase numbers until test matrix is realigned)
 - Eval IDs: `EVAL-{phase}-{seq}`
-- Component names: Twilio Voice Gateway (**optional**), Browser Voice Pipeline, Deepgram STT, ElevenLabs TTS, Conversation Engine, **Google Gemini** (LLM), **FastMCP MCP server** (Python) + **MCP client in Next** (`@modelcontextprotocol/sdk`), **Google Calendar + Sheets** (inside MCP server), **Post-call PII UI**
+- Component names: Twilio Voice Gateway (**optional**), Browser Voice Pipeline, Deepgram STT, ElevenLabs TTS, Conversation Engine, **Groq LLM** (OpenAI-compatible API), **FastMCP MCP server** (Python) + **MCP client in Next** (`@modelcontextprotocol/sdk`), **Google Calendar + Sheets** (inside MCP server), **Post-call PII UI**
 - Durable booking rows: **`Bookings` / `Advisor Pre-Bookings` / `PII_Submissions` in Google Sheets** (PostgreSQL sketches below are **legacy / alternate**)
 - MCP tool names (expose from FastMCP / match TS reference): `offer_slots`, `confirm_booking`, `submit_pii_booking`, plus drafts/sends as specified in [architecture.md](./architecture.md)
 
@@ -76,7 +76,8 @@ These two documents are coupled. Any change to one must be reflected in the othe
 ├── lib/
 │   ├── agent/                       # [Phase 1] Conversation Engine
 │   │   ├── engine.ts
-│   │   ├── llm.ts                   # Gemini + tools
+│   │   ├── llm.ts                   # Groq (OpenAI SDK) + tools
+│   │   ├── llmTools.ts              # OpenAI-format tool defs for Groq
 │   │   ├── toolHandlers.ts          # Maps tools → MCP client (no googleapis here for booking)
 │   │   └── ...
 │   ├── voice/                       # [Phase 4]
@@ -116,10 +117,10 @@ Every environment variable across all phases, in the order they are introduced.
 
 | Variable | Phase | Required | Description | Example |
 |----------|-------|----------|-------------|---------|
-| `GEMINI_API_KEY` | 1 | Yes | Google AI / Gemini API key (Conversation Engine) | *(secret)* |
-| `GEMINI_MODEL` | 1 | No | Model id (see `.env.example` at repo root) | `gemini-2.0-flash` |
-| `LLM_TIMEOUT_MS` | 1 | No | Max wait for LLM response in ms (default: 3000) | `3000` |
-| `LLM_MAX_RETRIES` | 1 | No | Retry count on LLM timeout (default: 1) | `1` |
+| `GROQ_API_KEY` | 1 | Yes | [Groq API](https://console.groq.com/keys) key (Conversation Engine) | *(secret)* |
+| `GROQ_MODEL` | 1 | No | Model id (see [Groq models](https://console.groq.com/docs/models)) | `llama-3.3-70b-versatile` |
+| `LLM_TIMEOUT_MS` | 1 | No | Max wait for LLM response in ms | `60000` |
+| `LLM_MAX_RETRIES` | 1 | No | Retries after HTTP 429 (default: 3) | `3` |
 | `LOG_LEVEL` | 1 | No | Logging level (default: INFO) | `INFO` |
 | `MCP_ADVISOR_SERVER_ENTRY` | 2 | No | Path or command for MCP server: **FastMCP** entry (e.g. `uv run python -m advisor_mcp`) or TS reference `advisor-mcp-server.ts` (`npx tsx …`) | *(see `.env.example`)* |
 | `DEEPGRAM_API_KEY` | 4 | Yes | Deepgram API key (browser streaming) | `dg-xxxxxxxx` |
@@ -152,7 +153,7 @@ Every environment variable across all phases, in the order they are introduced.
 |---------|-------|---------|
 | `next` | 1+ | App Router, Route Handlers |
 | `react` / `react-dom` | 1+ | UI |
-| `@google/generative-ai` | 1 | Gemini LLM + tool schemas |
+| `openai` | 1 | Groq LLM via OpenAI-compatible client (`baseURL` = Groq) + tools |
 | `@modelcontextprotocol/sdk` | 2 | MCP client in Next; MCP server in scheduling package |
 | `tsx` | 2 dev | Spawn MCP server via `npx tsx` |
 | `zod` | 1+ | Validation |
@@ -208,7 +209,7 @@ Add `react-hook-form`, `@hookform/resolvers`, and `@sentry/nextjs` when implemen
 
 **Behavior:** Load or create session state → `conversationEngine.processMessage(sessionId, text)` → return assistant reply. Same engine instance will later receive **transcripts** from **Phase 4** (rename or alias `processTranscript`).
 
-**Deploy:** Set **`GEMINI_API_KEY`** (and related model vars) in Vercel project settings. Use preview deployments for PRs.
+**Deploy:** Set **`GROQ_API_KEY`** and **`GROQ_MODEL`** in Vercel project settings. Use preview deployments for PRs.
 
 ### 1.2 System Prompt
 

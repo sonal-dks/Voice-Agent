@@ -47,8 +47,8 @@ function tryMapTopic(lower: string): string | null {
 }
 
 /**
- * Deterministic replies when `GEMINI_API_KEY` is not set (local dev / CI).
- * Does not replace Gemini in production — set the API key for real behavior.
+ * Deterministic replies when `GROQ_API_KEY` is not set (local dev / CI).
+ * Does not replace Groq in production — set the API key for real behavior.
  */
 export function offlineAssistantReply(
   session: SessionState,
@@ -91,7 +91,7 @@ export function offlineAssistantReply(
         lower
       )
     ) {
-      return `${prefix}Thanks — I've noted your preference. With Gemini + Google Calendar configured, I would call **offer_slots** here to fetch two real IST slots. Set **GEMINI_API_KEY** and Google MCP env vars to use live scheduling.`;
+      return `${prefix}Thanks — I've noted your preference. With Groq + Google Calendar configured, I would call **offer_slots** here to fetch two real IST slots. Set **GROQ_API_KEY** and Google MCP env vars to use live scheduling.`;
     }
     return `${prefix}Could you share a day and rough time (for example "tomorrow afternoon" or "Monday morning")?`;
   }
@@ -125,7 +125,7 @@ export function offlineAssistantReply(
     prior.length > 0 &&
     session.bookingTopic
   ) {
-    return `${prefix}Thanks — I've noted your preference. With Gemini + Google Calendar configured, I would call **offer_slots** here to fetch two real IST slots. Set **GEMINI_API_KEY** and Google MCP env vars to use live scheduling.`;
+    return `${prefix}Thanks — I've noted your preference. With Groq + Google Calendar configured, I would call **offer_slots** here to fetch two real IST slots. Set **GROQ_API_KEY** and Google MCP env vars to use live scheduling.`;
   }
   if (/book|appointment|consultation|advisor/.test(lower)) {
     return `${prefix}I'd be glad to help you book a consultation. ${TOPICS}\n\nWhich topic fits best?`;

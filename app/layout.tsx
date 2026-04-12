@@ -3,7 +3,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Advisor Appointment Scheduler",
-  description: "Phase 1 — text agent (Gemini)",
+  description: "Phase 1 — text agent (Groq)",
 };
 
 export default function RootLayout({

@@ -1,8 +1,8 @@
 # Phase 1 — Implementation
 
-> **Scope:** Conversation Engine + **Gemini 3 Flash** + guardrails + dialog state. **Production target:** Next.js Route Handlers on **Vercel** (not Docker/ECS). The Python layout below is illustrative; prefer `lib/agent/*.ts` as in [Docs/low-level-architecture.md](../Docs/low-level-architecture.md). **Environment:** copy [`.env.example`](../.env.example) to **repository root** `.env` only — `next.config.mjs` loads that file.
+> **Scope:** Conversation Engine + **Groq LLM** + guardrails + dialog state. **Production target:** Next.js Route Handlers on **Vercel** (not Docker/ECS). The Python layout below is illustrative; prefer `lib/agent/*.ts` as in [Docs/low-level-architecture.md](../Docs/low-level-architecture.md). **Environment:** copy [`.env.example`](../.env.example) to **repository root** `.env` only — `next.config.mjs` loads that file.
 
-**This repo:** from the **repo root**: `npm install`, `npm run dev`, open `/agent`. Set **`GEMINI_API_KEY`** (and optional **`GEMINI_MODEL`**) in **root** `.env` for live Gemini. If the key is absent, the server uses a small **offline** reply helper so local smoke tests still run (`npm run test:phase1` with the dev server up). Use **`npm run build`** before deploy.
+**This repo:** from the **repo root**: `npm install`, `npm run dev`, open `/agent`. Set **`GROQ_API_KEY`** (and optional **`GROQ_MODEL`**) in **root** `.env` for live Groq. If the key is absent, the server uses a small **offline** reply helper so local smoke tests still run (`npm run test:phase1` with the dev server up). Use **`npm run build`** before deploy.
 
 ## Downstream data & email (read this — owned by later phases, but fixed contract)
 
@@ -25,7 +25,8 @@ Phase 2 code does **not** call Sheets or Calendar yet unless you are integrating
 ```
 lib/agent/   (preferred — Next.js)
 ├── engine.ts           # Conversation Engine — main orchestrator
-├── llm.ts              # Google Gemini 3 Flash client with function/tool calling
+├── llm.ts              # Groq via OpenAI SDK (chat completions + tool_calls)
+├── llmTools.ts         # OpenAI-format tool definitions
 ├── prompts.ts          # System prompt, function definitions
 ├── state.ts            # Per-session dialog state
 └── guardrails.ts       # PII detection, advice refusal pre-check
@@ -44,10 +45,10 @@ src/agent/
 
 | Variable | Description | Example |
 |----------|-------------|---------|
-| `GEMINI_API_KEY` | Google GenAI API key | *(from Google AI Studio)* |
-| `GEMINI_MODEL` | Model id (Gemini 3 Flash) | e.g. `gemini-3-flash` (confirm in Google docs) |
-| `LLM_TIMEOUT_MS` | Max wait for LLM response | `3000` |
-| `LLM_MAX_RETRIES` | Retry count on timeout | `1` |
+| `GROQ_API_KEY` | Groq API key | *(from [Groq Console](https://console.groq.com/keys))* |
+| `GROQ_MODEL` | Model id | e.g. `llama-3.3-70b-versatile` (see [Groq models](https://console.groq.com/docs/models)) |
+| `LLM_TIMEOUT_MS` | Max wait for LLM response (ms) | `60000` |
+| `LLM_MAX_RETRIES` | Retries after HTTP 429 | `3` |
 
 Sheets/Calendar/Gmail env vars are introduced in **Phase 3–5** — see [low-level environment registry](../Docs/low-level-architecture.md#complete-environment-variable-registry).
 
@@ -67,21 +68,21 @@ Track `DialogPhase`, `topic`, `booking_code` (once Phase 3 confirms), `messages[
 
 ### PII Detector (`lib/agent/guardrails.ts`)
 
-Deterministic regex / pattern checks before transcripts hit Gemini — same patterns as low-level §1.6.
+Deterministic regex / pattern checks before transcripts hit the LLM — same patterns as low-level §1.6.
 
 ### LLM Client (`lib/agent/llm.ts`)
 
-Use **`@google/generative-ai`** with timeout + retry. Replace any legacy `_call_openai` naming with **`_callGemini`** (or equivalent).
+Use the official **`openai`** package with **`baseURL: "https://api.groq.com/openai/v1"`**, **`GROQ_API_KEY`**, chat completions, and **`tool_calls`** / **`role: "tool"`** follow-up turns. Apply **`LLM_TIMEOUT_MS`** and retry with backoff on **429** per **`LLM_MAX_RETRIES`**.
 
 ```typescript
 // Sketch
 async function complete(systemPrompt, messages, tools) {
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     try {
-      return await withTimeout(callGemini(systemPrompt, messages, tools), LLM_TIMEOUT_MS);
+      return await withTimeout(callGroqChat(systemPrompt, messages, tools), LLM_TIMEOUT_MS);
     } catch {
       if (attempt === MAX_RETRIES)
-        return { text: "I'm sorry — could you repeat that?", functionCall: null };
+        return { text: "I'm sorry — could you repeat that?", toolCalls: null };
     }
   }
 }
@@ -101,8 +102,8 @@ Not required for **engine-only** milestones; browser agent UI lives under `app/a
 
 ## Backend Deploy Steps (Vercel)
 
-1. Connect the repo to **Vercel**; ensure API routes use **Node runtime** for Gemini.
-2. Set **`GEMINI_API_KEY`**, **`GEMINI_MODEL`**, **`LLM_TIMEOUT_MS`**, **`LLM_MAX_RETRIES`** in the project **Environment Variables** (Preview + Production).
+1. Connect the repo to **Vercel**; ensure API routes use **Node runtime** for Groq.
+2. Set **`GROQ_API_KEY`**, **`GROQ_MODEL`**, **`LLM_TIMEOUT_MS`**, **`LLM_MAX_RETRIES`** in the project **Environment Variables** (Preview + Production).
 3. Deploy; run evals (`EVAL-2-*`) against the Preview URL.
 
 ---

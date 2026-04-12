@@ -17,7 +17,7 @@ export default function HomePage() {
         Advisor Appointment Scheduler
       </h1>
       <p style={{ color: "var(--muted)", margin: 0, textAlign: "center", maxWidth: 420 }}>
-        Phase 1 implementation: text chat with Gemini, guardrails, and disclaimer on the
+        Phase 1 implementation: text chat with Groq, guardrails, and disclaimer on the
         first assistant turn.
       </p>
       <Link

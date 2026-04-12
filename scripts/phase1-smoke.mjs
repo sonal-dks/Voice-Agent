@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Phase 1 smoke + acceptance checks against a running dev server.
- * Usage: GEMINI_API_KEY=... npm run dev   # terminal 1
+ * Usage: GROQ_API_KEY=... npm run dev   # terminal 1
  *        BASE_URL=http://127.0.0.1:3000 npm run test:phase1   # terminal 2
  *
  * Multi-turn calls include `messages` (full transcript + current user line) so

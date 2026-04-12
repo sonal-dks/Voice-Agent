@@ -1,59 +1,75 @@
-# Phase 2 — MCP scheduling & booking (single folder)
+# Phase 2 — Scheduling & booking (MCP)
 
-> **Maps to** [Docs/architecture.md](../Docs/architecture.md) §14 — Backend Phase 2 (MCP) and [Docs/low-level-architecture.md](../Docs/low-level-architecture.md) § Phase 2.
+> Real **Google Calendar** slots, **Sheets** rows, **booking codes**, and **Gmail** drafts — exposed to the Next.js app only through an **MCP** (Model Context Protocol) server. Maps to [Docs/architecture.md](../Docs/architecture.md) §14 Phase 2 and [Docs/low-level-architecture.md](../Docs/low-level-architecture.md) Phase 2.
 
-All **Phase 2** implementation artifacts for scheduling live under **`phase-2-scheduling-core/`**:
+## What is this folder?
+
+This package holds the **scheduling backend**: the MCP server that owns `googleapis` for Calendar, Sheets, and Gmail on the booking paths. The **Next.js app at the repo root** never imports `googleapis` for those flows — it calls tools through `@/lib/mcp/*`, which talks to this server.
+
+## What it does (features)
+
+- **`offer_slots`** — Returns two free slots from Google Calendar (timezone-aware), or a waitlist path with a `Bookings` row when nothing fits.
+- **`confirm_booking`** — Calendar hold, `Bookings` sheet row, advisor pre-booking line, and optional **Gmail draft** when Workspace delegation is set up.
+- **`submit_pii_booking`** — Post-call PII: encrypted storage, calendar update, user and advisor email (used from Phase 3 UI as well).
+
+## Project layout (this directory)
 
 | Path | Role |
 |------|------|
-| **`mcp/advisor-mcp-server.ts`** | **Canonical** stdio MCP server — `offer_slots`, `confirm_booking`, `submit_pii_booking`; **only** place that uses `googleapis` for Calendar / Sheets / Gmail on these paths. |
-| **`src/`** | Google Calendar, Sheets, booking codes, Gmail send/draft, PII crypto — imported by the MCP server. |
-| **`mcp-client/`** | Next.js MCP **client** (`schedulingMcpClient.ts`, `schedulingTypes.ts`) — re-exported from `lib/mcp/*` at the repo root so the app stays on `@/lib/mcp/...` imports. |
-| **`fastmcp_server/`** | Optional **FastMCP (Python)** bridge that delegates each tool to the TS server (same behavior, higher latency). |
-| **`scripts/mcp-one-shot-call.mts`** | One tool invocation (used by the Python bridge). |
+| **`mcp/advisor-mcp-server.ts`** | Main **stdio MCP server** — register tools here; imports Google helpers from `src/`. |
+| **`src/`** | Calendar, Sheets, booking codes, Gmail, PII crypto — **server-side only**. |
+| **`mcp-client/`** | TypeScript MCP **client** used by the root app via `lib/mcp/` re-exports. |
+| **`fastmcp_server/`** | Optional **Python FastMCP** bridge — same tool names, delegates to TS. See [fastmcp_server/README.md](./fastmcp_server/README.md). |
+| **`scripts/mcp-one-shot-call.mts`** | Single tool invocation helper (e.g. for the Python bridge). |
 
-The **Next.js app** (repo root) owns the conversation engine and calls Phase 2 **only** through the MCP client — **no** `googleapis` in the Next bundle for booking or PII submit.
+## Prerequisites
 
-## Tools (MCP)
-
-- **`offer_slots`** — Two real free slots from Google Calendar (**IST**), or waitlist + `Bookings` row.
-- **`confirm_booking`** — Tentative Calendar hold, `Bookings` row, **Advisor Pre-Bookings** line, **Gmail draft** to `ADVISOR_INBOX_EMAIL` when delegation is configured; updates `side_effects_completed` when calendar + pre-bookings + (draft or skipped) succeed.
-- **`submit_pii_booking`** — Post-call PII (encrypted row, calendar patch, emails); same MCP-only rule as architecture §14.
-
-## Google Sheets — `Bookings` row 1 headers
-
-`booking_code` | `topic` | `slot_time` | `slot_display` | `status` | `google_event_id` | `side_effects_completed` | `secure_link_token` | `pii_submitted` | `created_at` | `updated_at`
-
-Share the spreadsheet with the **service account** email (Editor).
+- [Node.js](https://nodejs.org/) 18+ and `npm`
+- Google **service account** JSON and a shared **Calendar** + **Spreadsheet** (see root `.env.example`)
+- For Gmail drafts/sends: Workspace **domain-wide delegation** with the right Gmail scopes (documented in `.env.example`)
 
 ## Environment variables
 
-See repository root **[`.env.example`](../.env.example)**. Phase 2 needs at minimum:
+All variables are documented in the repository root **[`.env.example`](../.env.example)**. Phase 2 typically needs:
 
 - `GOOGLE_SERVICE_ACCOUNT_JSON`, `GOOGLE_CALENDAR_ID`, `GOOGLE_SHEETS_SPREADSHEET_ID`
-- Optional tabs / timezone: `GOOGLE_SHEETS_TAB_BOOKINGS`, `GOOGLE_SHEETS_TAB_ADVISOR_PREBOOKINGS`, `ADVISOR_TIMEZONE`, `SLOT_DURATION_MINUTES`
-- Gmail (draft at booking + send on PII): `GMAIL_DELEGATED_USER`, `ADVISOR_INBOX_EMAIL` — Workspace **domain-wide delegation** must include **`gmail.send`** and **`gmail.compose`**.
+- Optional: `GOOGLE_SHEETS_TAB_BOOKINGS`, `GOOGLE_SHEETS_TAB_ADVISOR_PREBOOKINGS`, `ADVISOR_TIMEZONE`, `SLOT_DURATION_MINUTES`
+- Gmail: `GMAIL_DELEGATED_USER`, `ADVISOR_INBOX_EMAIL` (plus delegation setup)
 
-## Run MCP server locally
+## Google Sheets — `Bookings` header row
+
+Share the spreadsheet with the **service account email** (Editor). Row 1 columns:
+
+`booking_code` | `topic` | `slot_time` | `slot_display` | `status` | `google_event_id` | `side_effects_completed` | `secure_link_token` | `pii_submitted` | `created_at` | `updated_at`
+
+## Install dependencies (this folder)
+
+From **`phase-2-scheduling-core/`**:
+
+```bash
+npm install
+```
+
+## Run the MCP server locally
 
 ```bash
 cd phase-2-scheduling-core
-npm install
 npm run mcp:server
 ```
 
-(Stdio server — typically started by the Next client, not used standalone in a terminal unless you are debugging.)
+This is a **stdio** server — in normal development the **Next.js app** starts it as a child process. You usually run this command only when **debugging** the server on its own.
 
-## Optional Python FastMCP
+## Optional Python bridge
 
-See **[fastmcp_server/README.md](./fastmcp_server/README.md)**.
+If you need a Python MCP host, read [fastmcp_server/README.md](./fastmcp_server/README.md) and set `MCP_ADVISOR_SERVER_ENTRY` to your launcher.
 
-## Exit criteria
+## Quality and design notes
 
-- [tests.md](./tests.md)
-- [evals.md](./evals.md)
+- [tests.md](./tests.md) — test cases
+- [evals.md](./evals.md) — evaluation notes
+- [implementation.md](./implementation.md) — deeper build notes
 
-## Related docs
+## Related
 
-- [implementation.md](./implementation.md) — build notes
-- Next.js app (repo root): [../](../)
+- Main app setup: [../README.md](../README.md)
+- Architecture: [../Docs/architecture.md](../Docs/architecture.md)

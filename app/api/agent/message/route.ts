@@ -37,7 +37,7 @@ export async function POST(req: Request) {
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Internal error";
-    const status = msg.includes("GEMINI_API_KEY") ? 503 : 500;
+    const status = msg.includes("GROQ_API_KEY") ? 503 : 500;
     return NextResponse.json({ error: msg }, { status });
   }
 }

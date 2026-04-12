@@ -25,7 +25,7 @@ Use this file to know **what “done” looks like** for Phase 1 before you move
 | **`lib/agent/engine.ts`** | Orchestrates turns, guardrails → LLM → reply. |
 | **`lib/agent/prompts.ts`** | System prompt, intents, tool declarations (stubs OK for scheduling tools in Phase 1). |
 | **`lib/agent/state.ts`** | Per-`sessionId` in-memory dialog state. |
-| **`lib/agent/llm.ts`** | Gemini 3 Flash (`GEMINI_API_KEY` / `GEMINI_MODEL`). |
+| **`lib/agent/llm.ts`** | Groq via OpenAI SDK (`GROQ_API_KEY` / `GROQ_MODEL`). |
 | **`lib/agent/guardrails.ts`** | Pre-LLM PII / policy checks. |
 
 **Not in Phase 1:** Google Calendar/Sheets/Gmail side-effects (Phases 2–3), post-call PII form (Phase 4), browser STT/TTS routes (Phase 5), Twilio.
@@ -51,7 +51,7 @@ Per architecture, **UI-1** ships with Phase 1:
 |------|--------|
 | **Manual cases** | [tests.md](./tests.md) — TC-1-01 … TC-1-05 on **text** (browser and/or `curl`). |
 | **Eval harness** | [evals.md](./evals.md) — e.g. EVAL-1-01 / EVAL-1-02 on **text** transcripts. |
-| **Deploy** | Preview URL on Vercel; env: at least **`GEMINI_API_KEY`** (and **`GEMINI_MODEL`** as per [`.env.example`](../.env.example)). |
+| **Deploy** | Preview URL on Vercel; env: at least **`GROQ_API_KEY`** (and **`GROQ_MODEL`** as per [`.env.example`](../.env.example)). |
 
 ---
 

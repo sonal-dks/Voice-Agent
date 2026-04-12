@@ -2,7 +2,7 @@
 
 ## What AI capability this phase introduces or modifies
 
-Phase 3 extends **Gemini 3 Flash**'s role from intent classification (Phase 2) to multi-turn booking flow orchestration: the LLM must decide when to call `offer_slots`, correctly parse the caller's slot selection from natural language, and call `confirm_booking` with the right arguments. This is the first phase where LLM tool-calling accuracy directly impacts a database write.
+Phase 3 extends the **Groq** conversation engine from intent classification (Phase 2) to multi-turn booking flow orchestration: the LLM must decide when to call `offer_slots`, correctly parse the caller's slot selection from natural language, and call `confirm_booking` with the right arguments. This is the first phase where LLM tool-calling accuracy directly impacts a database write.
 
 ## Eval dataset
 
@@ -56,7 +56,7 @@ No baseline — first scheduling eval. Phase 2 evals cover intent classification
 
 ### Expected result
 
-Flow completion ≥ 0.90 because the booking flow is linear (topic → time → offer → select → confirm) and Gemini 3 Flash follows explicit tool-calling sequences. The main risk is ambiguous time preferences ("sometime next week") that the model must resolve to a specific day parameter.
+Flow completion ≥ 0.90 because the booking flow is linear (topic → time → offer → select → confirm) and the Groq model follows explicit tool-calling sequences. The main risk is ambiguous time preferences ("sometime next week") that the model must resolve to a specific day parameter.
 
 ### Failure analysis guide
 

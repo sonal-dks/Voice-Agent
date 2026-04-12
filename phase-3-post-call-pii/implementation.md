@@ -3,7 +3,7 @@
 ## Rules
 
 - **MCP-only** for Sheets / Calendar / Gmail on submit and lookup (architecture §14).
-- **Do not** pass `secure_link_token` in Gemini `functionResponse` payloads — strip in `toolHandlers.ts` after copying to session.
+- **Do not** pass `secure_link_token` in LLM **tool result** payloads to the model — strip in `toolHandlers.ts` after copying to session.
 - `phase-3-post-call-pii/` sits at repo root alongside the Next.js app (no symlink needed).
 - Phase 3 **server libs** import MCP via `@/lib/mcp/schedulingMcpClient` (not `../../phase-2/...`) so TypeScript works when files are reached through the symlink.
 

@@ -5,7 +5,7 @@
 ## Pre-conditions
 
 - Next.js app deployed (e.g. Vercel Preview) with Phase 1 code.
-- Environment variables set: `GEMINI_API_KEY`, `GEMINI_MODEL` (Gemini 3 Flash) — see [`.env.example`](../.env.example).
+- Environment variables set: `GROQ_API_KEY`, `GROQ_MODEL` — see [`.env.example`](../.env.example).
 
 ```bash
 curl -s https://<host>/api/health

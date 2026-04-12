@@ -1,12 +1,12 @@
 # Voice Agent: Advisor Appointment Scheduler — Architecture
 
-> **Companion document:** [low-level-architecture.md](./low-level-architecture.md) contains the full implementation specification — code-level details, schemas, file structures, environment variables, deploy procedures, and rollback plans. Both documents share the same identifiers (component names, TC-IDs, EVAL-IDs, phase numbers) and must stay in sync. See the **Document Sync Protocol** in `low-level-architecture.md` for the rules governing changes across both files. **User stories & E2E flows:** [userstories.md](./userstories.md). **Environment variables:** a **single** template for all phases lives at **repository root** [`.env.example`](../.env.example) — copy to `.env` locally (gitignored); set real values in **Vercel**, not in GitHub. **LLM:** **Gemini 3 Flash** (Google GenAI API). **Google Calendar / Sheets / Gmail (booking + PII path):** **MCP only** in Next.js — **Gmail** supports **OAuth 2.0** (personal `@gmail.com`, refresh token in env) or **Google Workspace** domain-wide **delegation** (service account + `GMAIL_DELEGATED_USER`); see **§12c**. Implement the **MCP tool server with [FastMCP](https://gofastmcp.com/getting-started/welcome)** (Python) in **Backend Phase 2** (MCP); Next stays an **MCP client** only. The repo may still ship a **TypeScript stdio reference** ([`phase-2-scheduling-core/mcp/advisor-mcp-server.ts`](../phase-2-scheduling-core/mcp/advisor-mcp-server.ts)) until FastMCP parity; treat FastMCP as the **target** for new MCP work per [low-level-architecture.md](./low-level-architecture.md).
+> **Companion document:** [low-level-architecture.md](./low-level-architecture.md) contains the full implementation specification — code-level details, schemas, file structures, environment variables, deploy procedures, and rollback plans. Both documents share the same identifiers (component names, TC-IDs, EVAL-IDs, phase numbers) and must stay in sync. See the **Document Sync Protocol** in `low-level-architecture.md` for the rules governing changes across both files. **User stories & E2E flows:** [userstories.md](./userstories.md). **Environment variables:** a **single** template for all phases lives at **repository root** [`.env.example`](../.env.example) — copy to `.env` locally (gitignored); set real values in **Vercel**, not in GitHub. **LLM:** **Groq** ([OpenAI-compatible API](https://console.groq.com/docs/openai)) — Chat Completions + **tool calling** via the official **`openai`** npm client with `baseURL: https://api.groq.com/openai/v1`, **`GROQ_API_KEY`**, and **`GROQ_MODEL`** (see [Groq models](https://console.groq.com/docs/models)). **Google Calendar / Sheets / Gmail (booking + PII path):** **MCP only** in Next.js — **Gmail** supports **OAuth 2.0** (personal `@gmail.com`, refresh token in env) or **Google Workspace** domain-wide **delegation** (service account + `GMAIL_DELEGATED_USER`); see **§12c**. Implement the **MCP tool server with [FastMCP](https://gofastmcp.com/getting-started/welcome)** (Python) in **Backend Phase 2** (MCP); Next stays an **MCP client** only. The repo may still ship a **TypeScript stdio reference** ([`phase-2-scheduling-core/mcp/advisor-mcp-server.ts`](../phase-2-scheduling-core/mcp/advisor-mcp-server.ts)) until FastMCP parity; treat FastMCP as the **target** for new MCP work per [low-level-architecture.md](./low-level-architecture.md).
 
 ## 1. Context & Problem Statement
 
 Users seeking human advisor consultations currently navigate manual booking flows — web forms, email threads, or hold queues — that average 10+ minutes and frequently drop off before completion. This voice agent replaces that friction with a short session that collects the consultation topic and time preference, offers **two real slots from Google Calendar** (no mock calendar), confirms the booking with a unique code, and triggers downstream **Google Calendar events** (tentative hold), internal notes, and **advisor email drafts** via MCP. **Initial implementation does not include Twilio:** the **primary UI is a browser-based agent**—first **text chat** (validate the agent end-to-end), then **microphone + speaker** (STT/TTS) on the same page—so you can prove the agent before any phone integration. **Twilio (PSTN) is a later, optional ingress** to the same pipeline. **Post-call PII collection and confirmation email are in scope:** after the agent session, the user completes **PII in a secondary UI**; on submit, the system **emails the user** booking details, **auto-sends (finalizes) advisor notification** at the same time, and shows an **on-screen success notification**. **Before PII submit**, the agent session UI shows **only a copyable booking ID** (no manual “send” or “notify advisor” control on that screen). **Hosting:** Next.js **frontend and backend on Vercel**; **no custom domain** required (`*.vercel.app` is fine). **Implementation order (time):** **① Text agent** → **② MCP** (real booking on text) → **③ Post-call PII** (still text-first UI) → **④ Browser voice** (mic + STT + TTS on the **same** page and engine). **Do not** build voice before text, MCP, and PII are acceptable on the text path—voice is **last**, additive. See **§14** and [low-level-architecture.md](./low-level-architecture.md).
 
-**What “text first, then voice” means:** You **prove the full product loop in plain text** (`POST /api/agent/message`)—intents, guardrails, Gemini tools, **MCP** scheduling/confirm, and **post-call PII submit**—**without** Deepgram or ElevenLabs. Only then do you **add voice**: microphone → STT → **same** engine → TTS. Voice is an **additive layer**, not a parallel rewrite.
+**What “text first, then voice” means:** You **prove the full product loop in plain text** (`POST /api/agent/message`)—intents, guardrails, **Groq** LLM tool calls, **MCP** scheduling/confirm, and **post-call PII submit**—**without** Deepgram or ElevenLabs. Only then do you **add voice**: microphone → STT → **same** engine → TTS. Voice is an **additive layer**, not a parallel rewrite.
 
 ### How this document, low-level-architecture.md, and phase folders line up
 
@@ -22,7 +22,7 @@ Users seeking human advisor consultations currently navigate manual booking flow
 
 | Phase (§14 order) | What it is | Repo folder (current name) |
 |-------------------|------------|------------------------------|
-| **1** | Text agent + Conversation Engine + Gemini | Repo root (`app/`, `lib/`, `package.json`); Phase 1 **docs** in [`phase-1-text-agent/`](../phase-1-text-agent/) |
+| **1** | Text agent + Conversation Engine + **Groq** LLM | Repo root (`app/`, `lib/`, `package.json`); Phase 1 **docs** in [`phase-1-text-agent/`](../phase-1-text-agent/) |
 | **2** | MCP: Calendar + Sheets + Gmail (FastMCP; Next = MCP client only) | [`phase-2-scheduling-core/`](../phase-2-scheduling-core/) (`mcp/`, `mcp-client/`, `src/`) + re-exports in `lib/mcp/` at repo root |
 | **3** | Post-call PII UI + submit via MCP | [`phase-3-post-call-pii/`](../phase-3-post-call-pii/) |
 | **4** | Browser STT/TTS (same page + engine) | Future — `lib/voice/`, `app/api/agent/stream/` |
@@ -58,7 +58,7 @@ graph TD
     STT -->|Transcript| API
     API -->|Text response| TTS[ElevenLabs TTS]
     TTS -->|Audio| WebUI
-    API -->|Prompt + History| LLM[Gemini 3 Flash]
+    API -->|Prompt + History| LLM[Groq LLM — tool calling]
     LLM -->|Tool Calls| CE[Conversation Engine]
     CE -->|MCP client| MCPServer[MCP Tool Server — FastMCP]
     MCPServer -->|Calendar API| GCal[Google Calendar — real]
@@ -122,17 +122,17 @@ graph TD
 
 #### Conversation Engine
 **Responsibility:** The brain of the agent. Manages dialog state, routes **user text or transcripts** to the LLM, enforces compliance guardrails (disclaimer, no PII storage, no-advice), parses LLM tool calls, orchestrates MCP execution, and produces the final response text.
-**Technology:** **Google Gemini 3 Flash** via the Google GenAI API with tool/function calling (`@google/generative-ai` in Node or `google-generativeai` in Python — see low-level doc). State is held in-memory per **session** (short-lived).
+**Technology:** **Groq** via the [OpenAI-compatible HTTP API](https://console.groq.com/docs/openai) with **tool/function calling** (`openai` package in Node, `baseURL` set to Groq — see low-level doc). State is held in-memory per **session** (short-lived).
 **Interfaces:** Called by the Agent API with **text** (Step 1) or **transcript** (Step 2). Twilio path passes the same transcript shape.
 **Scaling strategy:** Stateful per session but short-lived.
 **Owner / repo:** `src/agent/engine.py`, `src/agent/prompts.py`, `src/agent/state.py` (or TypeScript equivalents under `lib/agent/`)
 
-#### Google Gemini 3 Flash LLM
+#### Groq LLM (OpenAI-compatible)
 **Responsibility:** Intent classification, dialog response generation, and MCP tool call decisions based on conversation context and system prompt.
-**Technology:** **Gemini 3 Flash** via the **Google GenAI API** with **function/tool calling** (same tool schema as in prompts). Chosen for speed/cost profile suitable for conversational turns while meeting intent-accuracy targets on the eval set (`GEMINI_MODEL` / model id configured via env — see low-level doc).
-**Interfaces:** GenAI generateContent (or equivalent) with tool declarations for: `offer_slots`, `confirm_booking`, `create_calendar_hold`, `append_notes`, `draft_email`, `generate_booking_code`.
-**Scaling strategy:** Managed API. Rate limits per Google AI / project quotas — exponential backoff. Target: \< 800ms p95 for single completion where possible.
-**Owner / repo:** `lib/agent/llm.ts` or `src/agent/llm.py`
+**Technology:** **Groq-hosted models** (e.g. Llama 3.3) via **`POST /v1/chat/completions`** with **tools** / function calling — same logical tools as in `lib/agent/llmTools.ts` (`detect_intent`, `offer_slots`, `confirm_booking`). **`GROQ_MODEL`** and **`GROQ_API_KEY`** in env (see [`.env.example`](../.env.example)).
+**Interfaces:** OpenAI SDK pointed at Groq `baseURL`; assistant messages may include `tool_calls`; results returned as `role: tool` follow-ups until the model emits final user-facing text.
+**Scaling strategy:** Managed API — Groq rate limits; exponential backoff on 429 (`LLM_MAX_RETRIES`). Target: low latency suitable for conversational turns.
+**Owner / repo:** `lib/agent/llm.ts`, `lib/agent/llmTools.ts`
 
 #### MCP Tool Server
 **Responsibility:** Executes side-effects triggered by the LLM's tool calls: **Google Calendar** events, notes entries, and **email drafts** (and later **send** when invoked from the UI button).
@@ -166,7 +166,7 @@ sequenceDiagram
     participant API as Agent API
     participant STT as Deepgram STT
     participant CE as Conversation Engine
-    participant LLM as Gemini 3 Flash
+    participant LLM as Groq LLM
     participant TTS as ElevenLabs TTS
     participant MCP as MCP Tool Server
     participant GCal as Google Calendar
@@ -237,13 +237,13 @@ sequenceDiagram
 
 ## 6. Key Design Decisions (ADRs)
 
-#### Decision: Gemini 3 Flash with tool calling instead of a custom intent classifier
+#### Decision: Groq LLM with tool calling instead of a custom intent classifier
 
 **Status:** Accepted (revised 2026-04)
 
 **Context:** The agent must classify 5 intents and manage multi-turn dialog with context-dependent slot filling. A custom NLU model (Rasa, Dialogflow) would require training data collection and ongoing model maintenance. The dialog complexity is moderate — 5 intents, 3 slot types, strict guardrails.
 
-**Decision:** Use **Google Gemini 3 Flash** via the **Google GenAI API** with **function/tool declarations** for all tool interactions. Intent classification, slot extraction, and response generation happen in a **single** model call per turn.
+**Decision:** Use **Groq** ([OpenAI-compatible chat completions](https://console.groq.com/docs/openai)) with **function/tool declarations** for all tool interactions. Intent classification, slot extraction, and response generation happen in a **single** model turn per user message (with internal tool round-trips as needed).
 
 **Alternatives Considered:**
 
@@ -251,12 +251,12 @@ sequenceDiagram
 |--------|--------------|
 | Rasa NLU + custom dialog manager | Requires 500+ training examples per intent, separate hosting, and ongoing retraining. Over-engineered for 5 intents. |
 | Dialogflow CX | Flow-based design is rigid for edge cases; less flexible than LLM + tools for MCP orchestration. |
-| Heavier / slower models for v1 | Flash prioritizes latency for voice; accuracy held to eval gates (G2, EVAL-2-01). |
+| Google Gemini (GenAI API) | Valid option; **v1 default in this repo is Groq** for generous free-tier throughput and OpenAI-compatible tooling. |
 
 **Consequences:**
 - Prompt engineering replaces model training — faster iteration, no ML pipeline
-- Per-call cost and latency depend on Gemini 3 Flash pricing and regional quotas — monitor via Google AI / Cloud console
-- Latency depends on Google GenAI API availability — mitigated with timeout + retry + filler audio
+- Per-call cost and latency depend on **Groq** model choice (`GROQ_MODEL`) and account limits — monitor in [Groq Console](https://console.groq.com/)
+- Latency / availability — mitigated with `LLM_TIMEOUT_MS`, 429 backoff (`LLM_MAX_RETRIES`), and user-facing fallbacks
 
 ---
 
@@ -310,7 +310,7 @@ sequenceDiagram
 
 **Context:** The LLM must trigger three distinct side-effects on booking confirmation: calendar hold, notes append, and email draft. These could be called directly from the Conversation Engine, but the problem statement specifies MCP as the integration layer.
 
-**Decision:** Implement an MCP-compliant tool server that exposes calendar, notes, and email as discrete tools. **Build the server with [FastMCP](https://gofastmcp.com/getting-started/welcome)** (Python): declare tools as functions, get schema and validation automatically, and run a standards-compliant MCP server ([Welcome to FastMCP](https://gofastmcp.com/getting-started/welcome)). The Conversation Engine maps **Gemini tool calls** to MCP tool invocations (direct client or bridge — see low-level doc).
+**Decision:** Implement an MCP-compliant tool server that exposes calendar, notes, and email as discrete tools. **Build the server with [FastMCP](https://gofastmcp.com/getting-started/welcome)** (Python): declare tools as functions, get schema and validation automatically, and run a standards-compliant MCP server ([Welcome to FastMCP](https://gofastmcp.com/getting-started/welcome)). The Conversation Engine maps **LLM tool calls** (Groq / OpenAI-format) to MCP tool invocations (direct client or bridge — see low-level doc).
 
 **Alternatives Considered:**
 
@@ -518,7 +518,7 @@ app/
 | **Single project** | One Vercel project hosts **all** UI routes + **all** `app/api/*` Route Handlers — no separate “frontend deploy” vs “API deploy” unless you split repos later. |
 | **Preview vs Production** | Every PR gets a **Preview URL** (`*.vercel.app`); use it for stakeholder demos of UI changes. Set **Preview** env vars (non-prod keys) in Vercel → Settings → Environment Variables. |
 | **Public env** | Only **`NEXT_PUBLIC_*`** is exposed to the browser — never put secrets there. Agent API URLs can be relative (`/api/...`) so no public base URL is required. |
-| **Regions** | Choose Vercel **region** close to users (e.g. `iad1`) for latency; Gemini/Google APIs are called **server-side** from that region. |
+| **Regions** | Choose Vercel **region** close to users (e.g. `iad1`) for latency; **Groq** and Google APIs are called **server-side** from that region. |
 | **Analytics** | Enable **Vercel Analytics** / Speed Insights on the agent and booking pages for LCP, CLS (see §10). |
 
 ## 10. Scalability & Performance
@@ -538,7 +538,7 @@ app/
 |------------|-----------|------------|
 | Agent API (Vercel) | Serverless concurrency limits | Use streaming wisely; split heavy work to background if needed |
 | Google Calendar API | Per-project quotas | Exponential backoff; cache reads |
-| Google GenAI / Gemini API quotas | Per-project limits | Request queue with backpressure; monitor quotas in Google AI Studio / Cloud |
+| Groq API rate limits | Per-key limits | Backoff on 429 (`LLM_MAX_RETRIES`); monitor in [Groq Console](https://console.groq.com/) |
 | Deepgram concurrent streams | 100 on Growth plan | Upgrade to Enterprise plan at 80 concurrent |
 | Google Sheets API quota | Per-minute read/write limits | Batch updates; exponential backoff |
 
@@ -552,7 +552,7 @@ app/
 | Component | Target p95 | Measured at |
 |-----------|-----------|-------------|
 | STT (speech end → transcript) | 300ms | Deepgram dashboard |
-| LLM (prompt → response) | 800ms | Google GenAI API latency / traces |
+| LLM (prompt → response) | 800ms | Groq API latency / traces |
 | TTS (text → first audio byte) | 200ms | ElevenLabs API latency |
 | Network overhead (Twilio ↔ service) | 100ms | Internal instrumentation |
 | **Total voice round-trip** | **< 1,500ms** | End-to-end measurement |
@@ -583,7 +583,7 @@ app/
 - Google APIs called server-side only.
 
 **Secrets management:**
-- **Vercel Environment Variables:** **`GEMINI_API_KEY`**, **`GEMINI_MODEL`**, `DEEPGRAM_API_KEY`, `ELEVENLABS_API_KEY`, **`ELEVENLABS_VOICE_ID`**, **`GOOGLE_SHEETS_SPREADSHEET_ID`**, `GOOGLE_SERVICE_ACCOUNT_JSON`, `GOOGLE_CALENDAR_ID`, **Gmail (pick one path):** **`GMAIL_OAUTH_CLIENT_ID`**, **`GMAIL_OAUTH_CLIENT_SECRET`**, **`GMAIL_OAUTH_REFRESH_TOKEN`**, **`GMAIL_OAUTH_REDIRECT_URI`**, **`GMAIL_OAUTH_USER_EMAIL`** (personal Gmail), **or** **`GMAIL_DELEGATED_USER`** (Workspace delegation only), plus **`ADVISOR_INBOX_EMAIL`**, **`ADVISOR_PUBLIC_DETAILS`**, **`PII_ENCRYPTION_KEY`** (optional if encrypting PII columns), optional `TWILIO_*` later.
+- **Vercel Environment Variables:** **`GROQ_API_KEY`**, **`GROQ_MODEL`**, `DEEPGRAM_API_KEY`, `ELEVENLABS_API_KEY`, **`ELEVENLABS_VOICE_ID`**, **`GOOGLE_SHEETS_SPREADSHEET_ID`**, `GOOGLE_SERVICE_ACCOUNT_JSON`, `GOOGLE_CALENDAR_ID`, **Gmail (pick one path):** **`GMAIL_OAUTH_CLIENT_ID`**, **`GMAIL_OAUTH_CLIENT_SECRET`**, **`GMAIL_OAUTH_REFRESH_TOKEN`**, **`GMAIL_OAUTH_REDIRECT_URI`**, **`GMAIL_OAUTH_USER_EMAIL`** (personal Gmail), **or** **`GMAIL_DELEGATED_USER`** (Workspace delegation only), plus **`ADVISOR_INBOX_EMAIL`**, **`ADVISOR_PUBLIC_DETAILS`**, **`PII_ENCRYPTION_KEY`** (optional if encrypting PII columns), optional `TWILIO_*` later.
 
 **Compliance requirements:**
 - **Disclaimer:** Shown at session start (text or first voice turn).
@@ -612,7 +612,7 @@ app/
 | Layer | What it is | Deployed as |
 |-------|------------|-------------|
 | **Frontend** | React UI: `app/agent/*`, `app/booking/*`, layouts, `components/`, client state, Tailwind, mic/Web Audio | **Static + SSR/CSR** chunks from `next build`; served by Vercel Edge/CDN |
-| **Backend** | **Route Handlers** `app/api/agent/*`, `app/api/booking/*`, `app/api/health/*` — Gemini, Sheets, Calendar, Gmail, orchestration | **Serverless Node functions** (per route or grouped); **must use Node runtime** where Gemini / Google APIs require it — not Edge for those routes |
+| **Backend** | **Route Handlers** `app/api/agent/*`, `app/api/booking/*`, `app/api/health/*` — **Groq** LLM, Sheets, Calendar, Gmail, orchestration | **Serverless Node functions** (per route or grouped); **must use Node runtime** where LLM / Google APIs require it — not Edge for those routes |
 | **Optional MCP (FastMCP)** | Python MCP process | **Separate** process or container (not the Edge runtime): same Vercel project as **serverless** only if you run MCP in a **Node** bridge or external host; many teams run FastMCP as a small sidecar or call tools in-process — see low-level doc |
 
 **Rule of thumb:** If it touches **secrets** or **long I/O** (LLM, Calendar, Gmail), implement it under **`app/api/...`** (server), not in client components.
@@ -623,9 +623,9 @@ app/
 |----------|-------|
 | Hosting | **Vercel** — **one** project for UI + API |
 | Build | `next build` (root of Next.js app) |
-| Runtime | **Node.js** for API routes that call **Gemini**, Google Sheets, Calendar, Gmail |
+| Runtime | **Node.js** for API routes that call **Groq**, Google Sheets, Calendar, Gmail |
 | Environments | **Preview** (per PR branch) → **Production** (main) |
-| Secrets | **Vercel → Project → Settings → Environment Variables** — attach to Preview and/or Production (`GEMINI_*`, `DEEPGRAM_*`, `ELEVENLABS_*`, `GOOGLE_*`, `GOOGLE_SHEETS_*`, `GMAIL_OAUTH_*` or `GMAIL_DELEGATED_USER`, `PII_ENCRYPTION_KEY`, `ADVISOR_*`); never commit |
+| Secrets | **Vercel → Project → Settings → Environment Variables** — attach to Preview and/or Production (`GROQ_*`, `DEEPGRAM_*`, `ELEVENLABS_*`, `GOOGLE_*`, `GOOGLE_SHEETS_*`, `GMAIL_OAUTH_*` or `GMAIL_DELEGATED_USER`, `PII_ENCRYPTION_KEY`, `ADVISOR_*`); never commit |
 | Domain | Default **`https://<project>.vercel.app`** — custom domain optional |
 
 **CI/CD:**
@@ -643,7 +643,7 @@ PR opened → Vercel Preview (full UI + API)
 | Service | Where it lives | Connection from Vercel |
 |---------|----------------|-------------------------|
 | **Google Sheets** (bookings + PII) | User-owned spreadsheet, shared to service account | `GOOGLE_SHEETS_SPREADSHEET_ID` + Sheets API from Route Handlers |
-| Gemini | Google AI API | Server-side only from Route Handlers |
+| **Groq LLM** | [Groq OpenAI-compatible API](https://console.groq.com/docs/openai) | Server-side only from Route Handlers |
 | Google Calendar | Google Cloud project | **`GOOGLE_SERVICE_ACCOUNT_JSON`** in env; Calendar API enabled; calendar shared to service account |
 | **Gmail** (drafts + `messages.send` on PII submit) | User’s mailbox | **Two supported modes** (MCP server in `phase-2-scheduling-core` picks one — OAuth first if fully configured): |
 
@@ -676,7 +676,7 @@ Use this for **first deploy** and **ongoing releases**. UI and backend ship toge
 
 1. **Repository:** Connect the Next.js app repo to **Vercel** (Import Project).
 2. **Framework:** Select **Next.js**; root directory = app root; build = `next build`; output default.
-3. **Runtime:** For routes using Gemini / Google clients, set **Node.js** on those Route Handlers (not Edge) — see Next.js `export const runtime = 'nodejs'` where needed.
+3. **Runtime:** For routes using **Groq** / Google clients, set **Node.js** on those Route Handlers (not Edge) — see Next.js `export const runtime = 'nodejs'` where needed.
 4. **Environments:** Configure **Production** (production branch, e.g. `main`) and **Preview** (all other branches or PRs).
 5. **Environment variables:** In **Project → Settings → Environment Variables**, add secrets per [low-level registry](./low-level-architecture.md#complete-environment-variable-registry). Mark **Preview** vs **Production**; use a **non-prod** spreadsheet id for Preview if possible.
 6. **First deploy:** Merge to main or deploy from CLI `vercel --prod`. Smoke-test `GET /api/health`.
@@ -698,7 +698,7 @@ Use this for **first deploy** and **ongoing releases**. UI and backend ship toge
 | **Lockfile** | Commit **one** of `package-lock.json` / `pnpm-lock.yaml` / `yarn.lock` | Non-reproducible installs |
 | **Google Cloud** | Enable **Sheets API**, **Calendar API**, **Gmail API** (as needed); share the **spreadsheet** (and Calendar) with the service account email; for personal Gmail add **OAuth consent screen** + OAuth client for **`GMAIL_OAUTH_*`** | 403 at runtime / Gmail auth errors |
 | **Service account** | `GOOGLE_SERVICE_ACCOUNT_JSON` as one-line JSON or base64 in Vercel; no trailing newline issues | Auth errors |
-| **Runtime** | Route Handlers calling Gemini/Google must use **`nodejs`** runtime, not Edge | Edge bundle errors / missing APIs |
+| **Runtime** | Route Handlers calling Groq/Google must use **`nodejs`** runtime, not Edge | Edge bundle errors / missing APIs |
 | **MCP (FastMCP) Python** | If MCP runs as a **separate** process, it needs its **own** host (Railway, Cloud Run, etc.) — Vercel alone does not run long-lived Python MCP unless containerized | Tool timeouts; bridge required |
 | **Git integration** | Vercel needs permission to read the repo (GitHub App OAuth) | Failed deploys |
 | **Environment parity** | Use a **staging** spreadsheet + test calendar for **Preview** env vars | Production data pollution |
@@ -736,7 +736,7 @@ Work is organized in **three parallel tracks**. **Backend phases 1–4** below f
 
 | Track | What it covers | Doc pointers |
 |-------|----------------|--------------|
-| **Backend** | Route Handlers, Conversation Engine, Gemini, **MCP client → MCP server** (Calendar/Sheets/Gmail on booking path), submit handler | **§14** phases 1–4, [low-level](./low-level-architecture.md) |
+| **Backend** | Route Handlers, Conversation Engine, **Groq** LLM, **MCP client → MCP server** (Calendar/Sheets/Gmail on booking path), submit handler | **§14** phases 1–4, [low-level](./low-level-architecture.md) |
 | **Frontend & UI** | `app/agent`, `app/booking`, components, a11y, mic UX, forms, toasts | **§9**, table **UI-1–UI-4** below |
 | **Vercel deployment** | Project link, envs, Preview vs Prod, rollback, GitHub integration pitfalls | **§12**, **§12e**, **§12f** |
 
@@ -761,7 +761,7 @@ All of this ships in **one Next.js app** on **one Vercel project** unless you ex
 
 | Arch. phase | Primary **frontend** work | Primary **backend** work | Vercel note |
 |-------------|---------------------------|---------------------------|-------------|
-| **1 — Text agent** | `app/agent` page: `ChatThread`, textarea, send button, disclaimer, loading states; session id in client | `app/api/agent/message`, Conversation Engine + **Gemini**, prompts, guardrails; no audio routes yet | Deploy Preview URL; test full flow in browser without mic |
+| **1 — Text agent** | `app/agent` page: `ChatThread`, textarea, send button, disclaimer, loading states; session id in client | `app/api/agent/message`, Conversation Engine + **Groq**, prompts, guardrails; no audio routes yet | Deploy Preview URL; test full flow in browser without mic |
 | **2 — MCP** | Slot chips/copy, **BookingIdPanel**, copyable booking code + CTA | Next **MCP client** (`lib/mcp/`) → **FastMCP** (or TS reference): Calendar, **Bookings** + **Advisor Pre-Bookings**, **Gmail draft** | [`phase-2-scheduling-core/`](../phase-2-scheduling-core/); `MCP_*` / `GOOGLE_*` env |
 | **3 — Post-call PII** | `app/booking/[code]`, form validation, success toast | `POST .../submit` → **MCP** only for PII row, Calendar patch, dual email | [`phase-3-post-call-pii/`](../phase-3-post-call-pii/) |
 | **4 — Browser voice** | `MicButton`, capture/stream audio, play TTS, permission UX | `app/api/agent/stream` (or chunked POST), Deepgram + ElevenLabs; same engine as text | **Node** runtime; future — `lib/voice/`, `app/api/agent/stream/` |
@@ -779,7 +779,7 @@ All of this ships in **one Next.js app** on **one Vercel project** unless you ex
 
 ### Backend — Phase 2 — MCP: Scheduling & booking side-effects (merged)
 
-**Goal:** One **MCP tool server** (build with **[FastMCP](https://gofastmcp.com/getting-started/welcome)** — Python) owns **all** Google side-effects for the agent session through confirmation: **two real Calendar slots**, **tentative Calendar hold**, **Bookings** row, **Advisor Pre-Bookings** append, advisor **Gmail draft**, and **PII submit** tools (`submit_pii_booking`, etc.) — **IST** rules as documented. The **Next.js** app maps Gemini tool calls to **MCP `tools/call`** only — **no `googleapis` in the Next bundle** for Calendar, Sheets, or Gmail on these paths. A **TypeScript stdio** server in-repo is a **reference bridge** until FastMCP is the single source of truth; see low-level doc.
+**Goal:** One **MCP tool server** (build with **[FastMCP](https://gofastmcp.com/getting-started/welcome)** — Python) owns **all** Google side-effects for the agent session through confirmation: **two real Calendar slots**, **tentative Calendar hold**, **Bookings** row, **Advisor Pre-Bookings** append, advisor **Gmail draft**, and **PII submit** tools (`submit_pii_booking`, etc.) — **IST** rules as documented. The **Next.js** app maps **LLM tool calls** to **MCP `tools/call`** only — **no `googleapis` in the Next bundle** for Calendar, Sheets, or Gmail on these paths. A **TypeScript stdio** server in-repo is a **reference bridge** until FastMCP is the single source of truth; see low-level doc.
 **Depends on:** Phase 1
 **Exit criteria:** Scheduling + MCP reliability tests pass against a **live** FastMCP (or reference TS) server + Google configuration; combined EVAL gates as scoped.
 **Estimated scope:** L
@@ -850,7 +850,7 @@ Status legend: 🔲 Not started · 🔄 In progress · ✅ Complete · ⛔ Block
 - [Twilio Media Streams documentation](https://www.twilio.com/docs/voice/media-streams)
 - [Deepgram Nova-2 streaming API](https://developers.deepgram.com/docs/getting-started-with-live-streaming-audio)
 - [ElevenLabs streaming TTS API](https://elevenlabs.io/docs/api-reference/text-to-speech-stream)
-- [Google AI Gemini API — function calling / tools](https://ai.google.dev/gemini-api/docs/function-calling) (tool schema for Gemini 3 Flash)
+- [Groq — Tool use / local tool calling](https://console.groq.com/docs/tool-use/local-tool-calling) (OpenAI-compatible tools; see `lib/agent/llmTools.ts`)
 - [FastMCP — Welcome](https://gofastmcp.com/getting-started/welcome) (Python MCP server framework)
 - [Model Context Protocol specification](https://modelcontextprotocol.io/)
 - [Next.js 14 App Router documentation](https://nextjs.org/docs/app)

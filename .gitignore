@@ -1,0 +1,41 @@
+# Dependencies
+node_modules/
+.pnp.*
+.yarn/
+
+# Next.js
+.next/
+out/
+build/
+
+# Environment & secrets (never commit)
+.env
+.env.*
+!.env.example
+
+# Google OAuth / service account downloads
+client_secret*.json
+voice-agent-*.json
+*credentials*.json
+
+# Logs & OS
+*.log
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+
+# TypeScript
+*.tsbuildinfo
+
+# Phase 2 nested deps (if present)
+phase-2-scheduling-core/node_modules/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+dist/
+*.egg

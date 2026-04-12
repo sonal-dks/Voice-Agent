@@ -1,0 +1,23 @@
+{
+  "name": "@voice/phase2-scheduling-core",
+  "private": true,
+  "version": "0.0.1",
+  "scripts": {
+    "mcp:server": "npx --yes tsx mcp/advisor-mcp-server.ts",
+    "mcp:one-shot": "npx --yes tsx scripts/mcp-one-shot-call.mts",
+    "gmail:oauth-token": "npx --yes tsx scripts/gmail-oauth-token.mts"
+  },
+  "description": "Phase 2 — MCP stdio server, Google Calendar/Sheets/Gmail, Next MCP client (no googleapis in Next.js for these paths)",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "google-auth-library": "^9.15.0",
+    "googleapis": "^144.0.0",
+    "luxon": "^3.5.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/luxon": "^3.4.2",
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.0"
+  }
+}

@@ -1,0 +1,18 @@
+[project]
+name = "advisor-mcp-fastmcp-bridge"
+version = "0.1.0"
+description = "Optional FastMCP (Python) stdio server that delegates tools to the TypeScript MCP implementation."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = ["fastmcp>=2.0.0"]
+
+[project.scripts]
+advisor-mcp-fastmcp = "advisor_mcp.bridge:main"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["advisor_mcp*"]

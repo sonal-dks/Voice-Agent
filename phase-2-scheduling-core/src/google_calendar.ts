@@ -16,23 +16,40 @@ function calendarId(): string {
  * End hour is exclusive for Luxon windowEnd; keep end at least last_slot_end + 1h for 30m slots
  * (e.g. evening through 9 PM IST needs end >= 22).
  */
+/** When the user has not specified a time-of-day window, scan a full working day (IST). */
+function isUnspecifiedDayPreference(pref: string): boolean {
+  const p = pref.trim().toLowerCase();
+  if (!p) return true;
+  return /^(any|unspecified|no\s*preference|any\s*time|full\s*day|whenever|flexible|whole\s*day)$/i.test(
+    p
+  );
+}
+
 function timePreferenceToHours(pref: string): { start: number; end: number } {
-  const p = pref.toLowerCase();
-  // Explicit late times (9 PM, 10 PM, 21:00, etc.) — search a late window
-  if (
-    /\b9\s*pm\b/.test(p) ||
-    /\b10\s*pm\b/.test(p) ||
-    /\b21\s*:?\d{0,2}\b/.test(p) ||
-    /\b22\s*:?\d{0,2}\b/.test(p)
-  ) {
-    return { start: 18, end: 23 };
+  if (isUnspecifiedDayPreference(pref)) {
+    return { start: 9, end: 22 };
   }
+  const p = pref.toLowerCase();
+
+  // Specific hour (e.g. "3 pm", "3pm", "15:00", "3:30 pm"): center a 3-hour window around it
+  const hourMatch =
+    p.match(/\b(\d{1,2})\s*(?::?\d{2})?\s*(am|pm)\b/i) ||
+    p.match(/\b(\d{1,2}):(\d{2})\b/);
+  if (hourMatch) {
+    let h = parseInt(hourMatch[1], 10);
+    const ampm = hourMatch[2]?.toLowerCase();
+    if (ampm === "pm" && h < 12) h += 12;
+    if (ampm === "am" && h === 12) h = 0;
+    if (!ampm && h >= 1 && h <= 7) h += 12; // bare "3" likely means 3 PM
+    const start = Math.max(9, h - 1);
+    const end = Math.min(23, h + 2);
+    return { start, end };
+  }
+
   if (p.includes("morning")) return { start: 9, end: 12 };
   if (p.includes("afternoon")) return { start: 12, end: 17 };
-  // "Evening" includes typical post-work up to ~9 PM IST (was 17–20, which excluded 9 PM).
   if (p.includes("evening")) return { start: 17, end: 23 };
   if (p.includes("night")) return { start: 19, end: 23 };
-  // default business window
   return { start: 9, end: 18 };
 }
 
@@ -140,6 +157,33 @@ export async function getAvailableSlots(input: {
 }
 
 /**
+ * True if the advisor calendar has no busy blocks overlapping [startIso, endIso).
+ */
+export async function isSlotFree(startIso: string, endIso: string): Promise<boolean> {
+  const start = new Date(startIso);
+  const end = new Date(endIso);
+  if (
+    !Number.isFinite(start.getTime()) ||
+    !Number.isFinite(end.getTime()) ||
+    end <= start
+  ) {
+    return false;
+  }
+  const auth = await getOAuthClient();
+  const calId = calendarId();
+  const cal = google.calendar({ version: "v3", auth });
+  const fb = await cal.freebusy.query({
+    requestBody: {
+      timeMin: start.toISOString(),
+      timeMax: end.toISOString(),
+      items: [{ id: calId }],
+    },
+  });
+  const busy = fb.data.calendars?.[calId]?.busy ?? [];
+  return busy.length === 0;
+}
+
+/**
  * Create a tentative calendar hold for a confirmed booking.
  */
 export async function createCalendarHold(input: {
@@ -157,24 +201,78 @@ export async function createCalendarHold(input: {
   const end = DateTime.fromISO(input.endIso, { setZone: true }).setZone(tz);
   const fmt = "yyyy-MM-dd'T'HH:mm:ss";
 
-  const res = await cal.events.insert({
-    calendarId: calId,
-    requestBody: {
-      summary: `Advisor consultation — ${input.topic} (${input.bookingCode})`,
-      description: `Booking code: ${input.bookingCode}\nTopic: ${input.topic}`,
-      start: { dateTime: start.toFormat(fmt), timeZone: tz },
-      end: { dateTime: end.toFormat(fmt), timeZone: tz },
-      transparency: "opaque",
-    },
-  });
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const res = await cal.events.insert({
+        calendarId: calId,
+        requestBody: {
+          summary: `Advisor consultation — ${input.topic} (${input.bookingCode})`,
+          description: `Booking code: ${input.bookingCode}\nTopic: ${input.topic}`,
+          start: { dateTime: start.toFormat(fmt), timeZone: tz },
+          end: { dateTime: end.toFormat(fmt), timeZone: tz },
+          transparency: "opaque",
+        },
+      });
+      const id = res.data.id;
+      if (!id) throw new Error("Calendar events.insert returned no id");
+      return id;
+    } catch (e) {
+      lastErr = e;
+      if (attempt === 0) {
+        await new Promise((r) => setTimeout(r, 400));
+        continue;
+      }
+      throw e;
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
+}
 
-  const id = res.data.id;
-  if (!id) throw new Error("Calendar events.insert returned no id");
-  return id;
+/**
+ * Delete (cancel) a calendar event by its id. Returns true if deleted; false if not found.
+ */
+export async function deleteCalendarEvent(eventId: string): Promise<boolean> {
+  const auth = await getOAuthClient();
+  const cal = google.calendar({ version: "v3", auth });
+  const calId = calendarId();
+  try {
+    await cal.events.delete({ calendarId: calId, eventId });
+    return true;
+  } catch (e: unknown) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (msg.includes("404") || msg.includes("Not Found")) return false;
+    throw e;
+  }
+}
+
+function googleApiErrors(err: unknown): { reason?: string; message?: string }[] {
+  const e = err as {
+    errors?: { reason?: string; message?: string }[];
+    response?: { data?: { error?: { errors?: { reason?: string; message?: string }[] } } };
+  };
+  const top = e.errors;
+  if (Array.isArray(top) && top.length > 0) return top;
+  const nested = e.response?.data?.error?.errors;
+  if (Array.isArray(nested) && nested.length > 0) return nested;
+  return [];
+}
+
+function isServiceAccountAttendeeForbidden(err: unknown): boolean {
+  if (
+    googleApiErrors(err).some((x) => x.reason === "forbiddenForServiceAccounts")
+  ) {
+    return true;
+  }
+  const e = err as { message?: string };
+  const m = e?.message ?? String(err);
+  return m.includes("Service accounts cannot invite attendees");
 }
 
 /**
  * Add user as attendee and append a short non-sensitive note to the event description.
+ * Consumer Gmail calendars: service accounts cannot add attendees without domain-wide delegation;
+ * in that case we only update the description (contact email is recorded there).
  */
 export async function patchCalendarEventForPiiSubmit(input: {
   eventId: string;
@@ -189,7 +287,8 @@ export async function patchCalendarEventForPiiSubmit(input: {
     eventId: input.eventId,
   });
   const prevDesc = existing.data.description ?? "";
-  const newDesc = `${prevDesc}\n\n---\nPII submitted via app.\n${input.note}`;
+  const contactLine = `Contact email: ${input.userEmail.trim()}`;
+  const newDesc = `${prevDesc}\n\n---\nPII submitted via app.\n${input.note}\n${contactLine}`;
   const seen = new Set<string>();
   const attendees = (existing.data.attendees ?? [])
     .filter((a) => a.email)
@@ -202,12 +301,26 @@ export async function patchCalendarEventForPiiSubmit(input: {
   if (u && !seen.has(u)) {
     attendees.push({ email: input.userEmail.trim() });
   }
-  await cal.events.patch({
-    calendarId: calId,
-    eventId: input.eventId,
-    requestBody: {
-      description: newDesc,
-      attendees,
-    },
-  });
+  try {
+    await cal.events.patch({
+      calendarId: calId,
+      eventId: input.eventId,
+      requestBody: {
+        description: newDesc,
+        attendees,
+      },
+    });
+  } catch (e) {
+    if (!isServiceAccountAttendeeForbidden(e)) throw e;
+    console.warn(
+      "[patchCalendarEventForPiiSubmit] Skipping attendee add (service account); description-only update."
+    );
+    await cal.events.patch({
+      calendarId: calId,
+      eventId: input.eventId,
+      requestBody: {
+        description: newDesc,
+      },
+    });
+  }
 }

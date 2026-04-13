@@ -25,6 +25,8 @@ export interface SessionState {
   lastBookingCode?: string | null;
   /** Phase 3 — secure token for post-call PII link (never send to LLM in tool responses) */
   lastSecureLinkToken?: string | null;
+  /** Last confirmed slot line (PII modal subtitle) */
+  lastSlotDisplay?: string | null;
 }
 
 const store = new Map<string, SessionState>();
@@ -42,6 +44,7 @@ export function createSession(): SessionState {
     offeredSlots: undefined,
     lastBookingCode: null,
     lastSecureLinkToken: null,
+    lastSlotDisplay: null,
     updatedAt: Date.now(),
   };
   store.set(sessionId, s);

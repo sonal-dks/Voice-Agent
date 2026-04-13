@@ -1,27 +1,153 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
-type ChatLine = { role: "user" | "assistant"; content: string };
+import { PiiBookingForm } from "@/phase-3-post-call-pii/components/PiiBookingForm";
+import { DISCLAIMER_PHRASE } from "@/lib/agent/prompts";
+import MicButton from "./components/MicButton";
+import { useVoice, type VoiceResponse } from "./components/useVoice";
+
+type ChatLine = { role: "user" | "assistant"; content: string; via?: "voice" };
+
+const OPENING = `${DISCLAIMER_PHRASE}
+
+Hello! I'm the Next Leap advisor appointment assistant. I can help you:
+
+• **Book** a new consultation
+• **Reschedule** or **cancel** an existing booking
+• **Check availability** for a specific day
+• **Prepare** — tips on what to bring
+
+What would you like to do?`;
+
+const END_PHRASES =
+  /^(bye|goodbye|end\s*chat|exit|done|no\s*thanks|nothing\s*else|that'?s\s*all|i'?m\s*done|close\s*chat|quit)$/i;
 
 export default function AgentPage() {
+  /* ── Session state ──────────────────────────────────────────────── */
   const [sessionId, setSessionId] = useState<string | null>(null);
-  const [lines, setLines] = useState<ChatLine[]>([]);
+  const [lines, setLines] = useState<ChatLine[]>([
+    { role: "assistant", content: OPENING },
+  ]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  /* ── Booking state ──────────────────────────────────────────────── */
   const [bookingCode, setBookingCode] = useState<string | null>(null);
   const [secureLinkToken, setSecureLinkToken] = useState<string | null>(null);
+  const [slotDisplay, setSlotDisplay] = useState("");
+  const [bookingTopic, setBookingTopic] = useState("");
+  const [piiModalOpen, setPiiModalOpen] = useState(false);
+  const [piiSuccessMsg, setPiiSuccessMsg] = useState<string | null>(null);
+  const [chatEnded, setChatEnded] = useState(false);
 
+  /* ── Mode: chat vs voice ────────────────────────────────────────── */
+  const [mode, setMode] = useState<"chat" | "voice">("chat");
+
+  /* ── Auto-scroll ────────────────────────────────────────────────── */
+  const scrollRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    scrollRef.current?.scrollTo({
+      top: scrollRef.current.scrollHeight,
+      behavior: "smooth",
+    });
+  }, [lines, loading]);
+
+  /* ── Apply server response (shared by text and voice paths) ──── */
+  const applyResponse = useCallback(
+    (data: {
+      sessionId?: string;
+      bookingCode?: string | null;
+      secureLinkToken?: string | null;
+      slotDisplay?: string | null;
+      bookingTopic?: string | null;
+    }) => {
+      if (data.sessionId) setSessionId(data.sessionId);
+      if (data.bookingCode) setBookingCode(data.bookingCode);
+      if (data.secureLinkToken) setSecureLinkToken(data.secureLinkToken);
+      if (data.slotDisplay != null) setSlotDisplay(data.slotDisplay);
+      if (data.bookingTopic != null) setBookingTopic(data.bookingTopic);
+    },
+    []
+  );
+
+  /* ── Voice hook ─────────────────────────────────────────────────── */
+  const voice = useVoice({
+    sessionId,
+    messages: lines,
+    disabled: piiModalOpen || chatEnded,
+    onResponse: useCallback(
+      (data: VoiceResponse) => {
+        if (END_PHRASES.test(data.transcript.trim())) {
+          setLines((p) => [
+            ...p,
+            { role: "user", content: data.transcript, via: "voice" },
+            {
+              role: "assistant",
+              content:
+                'Thank you for using Next Leap! Have a great day. Click "New conversation" below to start a fresh session.',
+            },
+          ]);
+          setChatEnded(true);
+          return;
+        }
+        setLines((p) => [
+          ...p,
+          { role: "user", content: data.transcript, via: "voice" },
+          { role: "assistant", content: data.assistant },
+        ]);
+        applyResponse(data);
+      },
+      [applyResponse]
+    ),
+    onError: useCallback((msg: string) => setError(msg), []),
+  });
+
+  /* ── New session ────────────────────────────────────────────────── */
+  const startNewSession = useCallback(() => {
+    voice.cancelRecording();
+    voice.stopPlayback();
+    setSessionId(null);
+    setLines([{ role: "assistant", content: OPENING }]);
+    setInput("");
+    setLoading(false);
+    setError(null);
+    setBookingCode(null);
+    setSecureLinkToken(null);
+    setSlotDisplay("");
+    setBookingTopic("");
+    setPiiModalOpen(false);
+    setPiiSuccessMsg(null);
+    setChatEnded(false);
+  }, [voice]);
+
+  /* ── Send text message (chat mode) ──────────────────────────────── */
   const send = useCallback(async () => {
     const text = input.trim();
-    if (!text || loading) return;
+    if (!text || loading || chatEnded) return;
+
+    if (END_PHRASES.test(text)) {
+      setLines((p) => [
+        ...p,
+        { role: "user", content: text },
+        {
+          role: "assistant",
+          content:
+            'Thank you for using Next Leap! Have a great day. Click "New conversation" below to start a fresh session.',
+        },
+      ]);
+      setInput("");
+      setChatEnded(true);
+      return;
+    }
+
     setLoading(true);
     setError(null);
     setInput("");
-    const userLine = { role: "user" as const, content: text };
-    const messagesPayload = [...lines, userLine];
-    setLines((prev) => [...prev, userLine]);
+    const userLine: ChatLine = { role: "user", content: text };
+    const payload = [...lines, userLine];
+    setLines((p) => [...p, userLine]);
 
     try {
       const res = await fetch("/api/agent/message", {
@@ -30,7 +156,7 @@ export default function AgentPage() {
         body: JSON.stringify({
           sessionId: sessionId ?? undefined,
           text,
-          messages: messagesPayload,
+          messages: payload,
         }),
       });
       const data = (await res.json()) as {
@@ -38,167 +164,711 @@ export default function AgentPage() {
         assistant?: string;
         bookingCode?: string | null;
         secureLinkToken?: string | null;
+        slotDisplay?: string | null;
+        bookingTopic?: string | null;
+        bookingJustConfirmed?: boolean;
         error?: string;
       };
-      if (!res.ok) {
-        throw new Error(data.error || res.statusText);
-      }
-      if (data.sessionId) setSessionId(data.sessionId);
-      setBookingCode(data.bookingCode ?? null);
-      setSecureLinkToken(data.secureLinkToken ?? null);
+      if (!res.ok) throw new Error(data.error || res.statusText);
+      applyResponse(data);
       if (data.assistant) {
-        setLines((prev) => [...prev, { role: "assistant", content: data.assistant! }]);
+        setLines((p) => [
+          ...p,
+          { role: "assistant", content: data.assistant! },
+        ]);
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Request failed";
       setError(msg);
-      setLines((prev) => prev.slice(0, -1));
+      setLines((p) => p.slice(0, -1));
     } finally {
       setLoading(false);
     }
-  }, [input, loading, sessionId, lines]);
+  }, [input, loading, sessionId, lines, chatEnded, applyResponse]);
+
+  /* ── Mic toggle handler ─────────────────────────────────────────── */
+  const handleMicToggle = useCallback(() => {
+    if (voice.isRecording) {
+      voice.stopRecording();
+    } else {
+      voice.startRecording();
+    }
+  }, [voice]);
+
+  const frozen = piiModalOpen;
+  const voiceBusy = voice.isProcessing || voice.isPlaying;
 
   return (
-    <main
+    <div
       style={{
-        maxWidth: 720,
-        margin: "0 auto",
-        minHeight: "100vh",
         display: "flex",
-        flexDirection: "column",
-        padding: 16,
-        gap: 12,
+        height: "100vh",
+        overflow: "hidden",
+        background: "var(--bg)",
       }}
     >
-      <header>
-        <h1 style={{ fontSize: "1.25rem", margin: "0 0 4px" }}>Web Agent — text</h1>
-        <p style={{ color: "var(--muted)", margin: 0, fontSize: "0.9rem" }}>
-          Session: {sessionId ? <code>{sessionId.slice(0, 8)}…</code> : "new"} · Text chat
-          (Phase 2 scheduling when configured)
-        </p>
-      </header>
-
-      {bookingCode && (
-        <aside
-          style={{
-            padding: "12px 14px",
-            borderRadius: 10,
-            background: "#1a2636",
-            border: "1px solid #2d4a6f",
-            fontSize: "0.9rem",
-          }}
-        >
-          <div>
-            <strong>Booking ID</strong>{" "}
-            <code style={{ fontSize: "1rem", color: "#7dd3fc" }}>{bookingCode}</code>
-            <span style={{ color: "var(--muted)", marginLeft: 8 }}>
-              — copy for your records. Do not share personal details in chat.
-            </span>
-          </div>
-          {secureLinkToken ? (
-            <p style={{ margin: "10px 0 0", lineHeight: 1.45 }}>
-              <strong style={{ color: "var(--text)" }}>Complete contact details (Phase 3)</strong>
-              <br />
-              <a
-                href={`/booking/${encodeURIComponent(bookingCode)}?token=${encodeURIComponent(secureLinkToken)}`}
-                style={{ fontWeight: 600, wordBreak: "break-all" }}
-              >
-                Open secure PII form
-              </a>
-            </p>
-          ) : null}
-        </aside>
-      )}
-
-      <section
+      {/* ── Sidebar ─────────────────────────────────────────────── */}
+      <aside
         style={{
-          flex: 1,
-          overflow: "auto",
-          background: "var(--panel)",
-          borderRadius: 12,
-          padding: 16,
+          width: 260,
+          background: "var(--sidebar)",
+          borderRight: "1px solid var(--border)",
           display: "flex",
           flexDirection: "column",
-          gap: 12,
-          minHeight: 280,
+          padding: "16px 12px",
+          flexShrink: 0,
         }}
       >
-        {lines.length === 0 && (
-          <p style={{ color: "var(--muted)", margin: 0 }}>
-            Type a message to start — e.g. &quot;I&apos;d like to book an appointment with an
-            advisor.&quot;
-          </p>
-        )}
-        {lines.map((l, i) => (
-          <div
-            key={i}
-            style={{
-              alignSelf: l.role === "user" ? "flex-end" : "flex-start",
-              maxWidth: "92%",
-              padding: "10px 14px",
-              borderRadius: 12,
-              background: l.role === "user" ? "var(--user)" : "#243044",
-              whiteSpace: "pre-wrap",
-              lineHeight: 1.45,
-              fontSize: "0.95rem",
-            }}
-          >
-            {l.content}
-          </div>
-        ))}
-        {loading && (
-          <span style={{ color: "var(--muted)", fontSize: "0.85rem" }}>Thinking…</span>
-        )}
-      </section>
-
-      {error && (
-        <p style={{ color: "#f87171", margin: 0, fontSize: "0.9rem" }} role="alert">
-          {error}
-        </p>
-      )}
-
-      <div style={{ display: "flex", gap: 8 }}>
-        <textarea
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              void send();
-            }
-          }}
-          placeholder="Message…"
-          rows={2}
-          disabled={loading}
+        <div
           style={{
-            flex: 1,
-            resize: "vertical",
-            padding: "10px 12px",
-            borderRadius: 8,
-            border: "1px solid #2d3d52",
-            background: "#121a24",
-            color: "var(--text)",
-            fontSize: "1rem",
-          }}
-        />
-        <button
-          type="button"
-          onClick={() => void send()}
-          disabled={loading || !input.trim()}
-          style={{
-            padding: "0 20px",
-            borderRadius: 8,
-            border: "none",
-            background: "var(--accent)",
-            color: "#fff",
-            fontWeight: 600,
-            cursor: loading ? "wait" : "pointer",
-            alignSelf: "flex-end",
+            fontWeight: 700,
+            fontSize: "1.1rem",
+            marginBottom: 20,
+            color: "var(--accent)",
           }}
         >
-          Send
+          Next Leap
+        </div>
+        <button
+          type="button"
+          onClick={startNewSession}
+          style={{
+            padding: "10px 12px",
+            borderRadius: 8,
+            background: "var(--bg)",
+            border: "1px solid var(--border)",
+            fontSize: "0.9rem",
+            cursor: "pointer",
+            textAlign: "left",
+            color: "var(--text)",
+            marginBottom: 8,
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+          }}
+        >
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <line x1="12" y1="5" x2="12" y2="19" />
+            <line x1="5" y1="12" x2="19" y2="12" />
+          </svg>
+          New conversation
         </button>
-      </div>
-    </main>
+        <div
+          style={{
+            padding: "10px 12px",
+            borderRadius: 8,
+            background: "var(--accent)",
+            color: "#fff",
+            fontSize: "0.9rem",
+            marginBottom: 12,
+            cursor: "default",
+            fontWeight: 500,
+          }}
+        >
+          Advisor Scheduling
+        </div>
+        <div style={{ flex: 1 }} />
+        {sessionId && (
+          <div style={{ fontSize: "0.72rem", color: "var(--muted)" }}>
+            Session: {sessionId.slice(0, 8)}…
+          </div>
+        )}
+      </aside>
+
+      {/* ── Main chat area ──────────────────────────────────────── */}
+      <main
+        style={{
+          flex: 1,
+          display: "flex",
+          flexDirection: "column",
+          position: "relative",
+        }}
+      >
+        {/* Booking banner */}
+        {bookingCode && !piiModalOpen && (
+          <div
+            style={{
+              padding: "10px 20px",
+              background: "var(--banner-bg)",
+              borderBottom: "1px solid var(--banner-border)",
+              display: "flex",
+              alignItems: "center",
+              gap: 12,
+              flexWrap: "wrap",
+              fontSize: "0.9rem",
+            }}
+          >
+            <span>
+              Booking{" "}
+              <code
+                style={{
+                  color: "var(--accent)",
+                  fontWeight: 700,
+                  background: "#fff",
+                  padding: "2px 6px",
+                  borderRadius: 4,
+                }}
+              >
+                {bookingCode}
+              </code>
+            </span>
+            {secureLinkToken && (
+              <button
+                type="button"
+                onClick={() => {
+                  setPiiModalOpen(true);
+                  setPiiSuccessMsg(null);
+                }}
+                style={{
+                  background: "var(--accent)",
+                  color: "#fff",
+                  border: "none",
+                  borderRadius: 6,
+                  padding: "6px 14px",
+                  fontWeight: 600,
+                  cursor: "pointer",
+                  fontSize: "0.85rem",
+                }}
+              >
+                Submit contact details
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* ── Messages thread ────────────────────────────────────── */}
+        <div
+          ref={scrollRef}
+          style={{
+            flex: 1,
+            overflow: "auto",
+            opacity: frozen ? 0.35 : 1,
+            pointerEvents: frozen ? "none" : "auto",
+            transition: "opacity 0.2s",
+          }}
+        >
+          <div
+            style={{ maxWidth: 768, margin: "0 auto", padding: "24px 20px" }}
+          >
+            {lines.map((l, i) => (
+              <div
+                key={i}
+                style={{
+                  display: "flex",
+                  gap: 12,
+                  marginBottom: 24,
+                  flexDirection: l.role === "user" ? "row-reverse" : "row",
+                }}
+              >
+                {/* Avatar */}
+                <div
+                  style={{
+                    width: 32,
+                    height: 32,
+                    borderRadius: "50%",
+                    background:
+                      l.role === "user" ? "#5436DA" : "var(--accent)",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    fontSize: "0.7rem",
+                    fontWeight: 700,
+                    color: "#fff",
+                    flexShrink: 0,
+                  }}
+                >
+                  {l.role === "user" ? (
+                    l.via === "voice" ? (
+                      <VoiceBadge />
+                    ) : (
+                      "U"
+                    )
+                  ) : (
+                    "NL"
+                  )}
+                </div>
+                {/* Bubble */}
+                <div
+                  style={{
+                    maxWidth: "80%",
+                    padding: "12px 16px",
+                    borderRadius: 16,
+                    background:
+                      l.role === "user"
+                        ? "var(--user-bg)"
+                        : "var(--assistant-bg)",
+                    border:
+                      l.role === "assistant"
+                        ? "1px solid var(--border)"
+                        : "1px solid var(--banner-border)",
+                    lineHeight: 1.55,
+                    fontSize: "0.95rem",
+                    whiteSpace: "pre-wrap",
+                    color: "var(--text)",
+                  }}
+                >
+                  {l.content}
+                </div>
+              </div>
+            ))}
+
+            {/* Loading indicator (text or voice) */}
+            {(loading || voice.isProcessing) && (
+              <div style={{ display: "flex", gap: 12, marginBottom: 24 }}>
+                <div
+                  style={{
+                    width: 32,
+                    height: 32,
+                    borderRadius: "50%",
+                    background: "var(--accent)",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    fontSize: "0.7rem",
+                    fontWeight: 700,
+                    color: "#fff",
+                    flexShrink: 0,
+                  }}
+                >
+                  NL
+                </div>
+                <div
+                  style={{
+                    color: "var(--muted)",
+                    padding: "12px 0",
+                    fontSize: "0.9rem",
+                  }}
+                >
+                  <span className="thinking-dots">Thinking</span>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Error bar */}
+        {error && (
+          <div
+            style={{
+              padding: "8px 20px",
+              color: "var(--danger)",
+              fontSize: "0.85rem",
+            }}
+          >
+            {error}
+          </div>
+        )}
+        {voice.error && !error && (
+          <div
+            style={{
+              padding: "8px 20px",
+              color: "var(--danger)",
+              fontSize: "0.85rem",
+            }}
+          >
+            {voice.error}
+          </div>
+        )}
+
+        {/* ── Chat ended ─────────────────────────────────────────── */}
+        {chatEnded && (
+          <div
+            style={{
+              padding: "16px 20px",
+              borderTop: "1px solid var(--border)",
+              background: "var(--sidebar)",
+              textAlign: "center",
+            }}
+          >
+            <button
+              type="button"
+              onClick={startNewSession}
+              style={{
+                padding: "12px 28px",
+                borderRadius: 8,
+                border: "none",
+                background: "var(--accent)",
+                color: "#fff",
+                fontWeight: 600,
+                cursor: "pointer",
+                fontSize: "1rem",
+              }}
+            >
+              New conversation
+            </button>
+          </div>
+        )}
+
+        {/* ── Input area (mode toggle + chat/voice inputs) ──────── */}
+        {!chatEnded && (
+          <div
+            style={{
+              borderTop: "1px solid var(--border)",
+              padding: "12px 20px 16px",
+              background: "var(--bg)",
+              opacity: frozen ? 0.4 : 1,
+              pointerEvents: frozen ? "none" : "auto",
+            }}
+          >
+            {/* Mode toggle tabs */}
+            <div
+              style={{
+                maxWidth: 768,
+                margin: "0 auto 10px",
+                display: "flex",
+                justifyContent: "center",
+              }}
+            >
+              <div
+                style={{
+                  display: "inline-flex",
+                  background: "var(--sidebar)",
+                  borderRadius: 10,
+                  padding: 3,
+                  gap: 2,
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={() => setMode("chat")}
+                  style={{
+                    padding: "6px 16px",
+                    borderRadius: 8,
+                    border: "none",
+                    fontSize: "0.82rem",
+                    fontWeight: 600,
+                    cursor: "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 6,
+                    background:
+                      mode === "chat" ? "var(--bg)" : "transparent",
+                    color:
+                      mode === "chat" ? "var(--text)" : "var(--muted)",
+                    boxShadow:
+                      mode === "chat"
+                        ? "0 1px 3px rgba(0,0,0,0.08)"
+                        : "none",
+                    transition: "all 0.15s",
+                  }}
+                >
+                  <KeyboardIcon />
+                  Chat
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMode("voice")}
+                  disabled={!voice.isSupported}
+                  title={
+                    voice.isSupported
+                      ? "Switch to voice mode"
+                      : "Voice not supported in this browser"
+                  }
+                  style={{
+                    padding: "6px 16px",
+                    borderRadius: 8,
+                    border: "none",
+                    fontSize: "0.82rem",
+                    fontWeight: 600,
+                    cursor: voice.isSupported ? "pointer" : "not-allowed",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 6,
+                    background:
+                      mode === "voice" ? "var(--bg)" : "transparent",
+                    color:
+                      mode === "voice"
+                        ? "var(--text)"
+                        : "var(--muted)",
+                    boxShadow:
+                      mode === "voice"
+                        ? "0 1px 3px rgba(0,0,0,0.08)"
+                        : "none",
+                    opacity: voice.isSupported ? 1 : 0.5,
+                    transition: "all 0.15s",
+                  }}
+                >
+                  <MicTabIcon />
+                  Voice
+                </button>
+              </div>
+            </div>
+
+            {/* ── Chat input ───────────────────────────────────── */}
+            {mode === "chat" && (
+              <div
+                style={{
+                  maxWidth: 768,
+                  margin: "0 auto",
+                  display: "flex",
+                  gap: 10,
+                }}
+              >
+                <textarea
+                  value={input}
+                  onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && !e.shiftKey) {
+                      e.preventDefault();
+                      void send();
+                    }
+                  }}
+                  placeholder="Message Next Leap…"
+                  rows={1}
+                  disabled={loading || frozen}
+                  style={{
+                    flex: 1,
+                    resize: "none",
+                    padding: "12px 16px",
+                    borderRadius: 24,
+                    border: "1px solid var(--input-border)",
+                    background: "var(--input-bg)",
+                    color: "var(--text)",
+                    fontSize: "0.95rem",
+                    outline: "none",
+                    lineHeight: 1.5,
+                    minHeight: 48,
+                    maxHeight: 160,
+                  }}
+                  onInput={(e) => {
+                    const el = e.currentTarget;
+                    el.style.height = "auto";
+                    el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={() => void send()}
+                  disabled={loading || !input.trim() || frozen}
+                  style={{
+                    width: 48,
+                    height: 48,
+                    borderRadius: "50%",
+                    border: "none",
+                    background:
+                      input.trim() && !loading
+                        ? "var(--accent)"
+                        : "var(--input-border)",
+                    color: "#fff",
+                    cursor: loading ? "wait" : "pointer",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    flexShrink: 0,
+                    transition: "background 0.15s",
+                  }}
+                  aria-label="Send"
+                >
+                  <svg
+                    width="20"
+                    height="20"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <line x1="22" y1="2" x2="11" y2="13" />
+                    <polygon points="22 2 15 22 11 13 2 9 22 2" />
+                  </svg>
+                </button>
+              </div>
+            )}
+
+            {/* ── Voice input ──────────────────────────────────── */}
+            {mode === "voice" && (
+              <div
+                style={{
+                  maxWidth: 768,
+                  margin: "0 auto",
+                  padding: "8px 0 4px",
+                }}
+              >
+                <MicButton
+                  status={voice.status}
+                  audioLevel={voice.audioLevel}
+                  disabled={frozen || voiceBusy}
+                  onToggle={handleMicToggle}
+                  onCancel={voice.cancelRecording}
+                />
+              </div>
+            )}
+
+            <p
+              style={{
+                textAlign: "center",
+                fontSize: "0.72rem",
+                color: "var(--muted)",
+                margin: "8px 0 0",
+              }}
+            >
+              Next Leap can make mistakes. Verify important scheduling details.
+            </p>
+          </div>
+        )}
+      </main>
+
+      {/* ── PII Modal ──────────────────────────────────────────── */}
+      {piiModalOpen && bookingCode && secureLinkToken && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "var(--modal-overlay)",
+            zIndex: 50,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 16,
+          }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget && piiSuccessMsg) {
+              setPiiModalOpen(false);
+            }
+          }}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="pii-title"
+            style={{
+              width: "100%",
+              maxWidth: 440,
+              maxHeight: "90vh",
+              overflow: "auto",
+              background: "var(--modal-bg)",
+              borderRadius: 16,
+              padding: "28px 24px",
+              border: "1px solid var(--border)",
+              boxShadow: "var(--shadow)",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {piiSuccessMsg ? (
+              <div>
+                <h2
+                  id="pii-title"
+                  style={{
+                    margin: "0 0 12px",
+                    fontSize: "1.2rem",
+                    color: "var(--accent)",
+                  }}
+                >
+                  Thank you!
+                </h2>
+                <p
+                  style={{
+                    margin: "0 0 20px",
+                    lineHeight: 1.55,
+                    fontSize: "0.95rem",
+                  }}
+                >
+                  {piiSuccessMsg}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPiiModalOpen(false);
+                    setPiiSuccessMsg(null);
+                  }}
+                  style={{
+                    padding: "12px 24px",
+                    borderRadius: 8,
+                    border: "none",
+                    background: "var(--accent)",
+                    color: "#fff",
+                    fontWeight: 600,
+                    cursor: "pointer",
+                    fontSize: "1rem",
+                  }}
+                >
+                  Back to chat
+                </button>
+              </div>
+            ) : (
+              <>
+                <h2
+                  id="pii-title"
+                  style={{ margin: "0 0 4px", fontSize: "1.2rem" }}
+                >
+                  Complete your booking
+                </h2>
+                <p
+                  style={{
+                    margin: "0 0 16px",
+                    color: "var(--muted)",
+                    fontSize: "0.88rem",
+                  }}
+                >
+                  Booking{" "}
+                  <code style={{ color: "var(--accent)" }}>{bookingCode}</code>
+                  {bookingTopic ? ` · ${bookingTopic}` : ""}
+                  {slotDisplay ? ` · ${slotDisplay}` : ""}
+                </p>
+                <PiiBookingForm
+                  bookingCode={bookingCode}
+                  secureLinkToken={secureLinkToken}
+                  topic={bookingTopic || "—"}
+                  slotDisplay={slotDisplay || "—"}
+                  completionMode="callback"
+                  onSubmitted={(p) => setPiiSuccessMsg(p.message)}
+                />
+              </>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ──────────────────────────────────────────────────────────────────── */
+/*  Small inline icons for mode tabs + voice badge                     */
+/* ──────────────────────────────────────────────────────────────────── */
+
+function KeyboardIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="2" y="4" width="20" height="16" rx="2" />
+      <line x1="6" y1="8" x2="6" y2="8" />
+      <line x1="10" y1="8" x2="10" y2="8" />
+      <line x1="14" y1="8" x2="14" y2="8" />
+      <line x1="18" y1="8" x2="18" y2="8" />
+      <line x1="6" y1="12" x2="6" y2="12" />
+      <line x1="10" y1="12" x2="10" y2="12" />
+      <line x1="14" y1="12" x2="14" y2="12" />
+      <line x1="18" y1="12" x2="18" y2="12" />
+      <line x1="8" y1="16" x2="16" y2="16" />
+    </svg>
+  );
+}
+
+function MicTabIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="9" y="1" width="6" height="12" rx="3" />
+      <path d="M19 10v1a7 7 0 0 1-14 0v-1" />
+      <line x1="12" y1="19" x2="12" y2="23" />
+      <line x1="8" y1="23" x2="16" y2="23" />
+    </svg>
+  );
+}
+
+function VoiceBadge() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="9" y="2" width="6" height="11" rx="3" />
+      <path d="M19 10v1a7 7 0 0 1-14 0v-1" />
+    </svg>
   );
 }

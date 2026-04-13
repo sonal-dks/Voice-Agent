@@ -270,65 +270,41 @@ Use natural, conversational language. Avoid jargon.
 
 **File:** `lib/agent/prompts.ts` (same module as § 1.2)
 
-Phase 1 introduces intent detection. **Phase 2** adds scheduling and MCP tools (legacy sketch labels below may still say “Phase 2/3/4” in comments — map them to **§14 Phase 2 MCP**).
+**Production (`lib/agent/llmTools.ts`):** Five Groq chat tools: **`offer_slots`**, **`confirm_booking`**, **`cancel_booking`**, **`reschedule_booking`**, **`lookup_booking`**. Intent is inferred in natural language (no `detect_intent` tool). **`offer_slots`:** `time_preference "any"` scans 09:00–22:00 IST; narrow values restrict the window. **`confirm_booking`:** offered slot keys OR `start_iso`/`end_iso` for user-specified time; MCP runs `isSlotFree` before insert. **`cancel_booking`:** by booking code; deletes Calendar, updates Sheets, sends email if PII on file. **`reschedule_booking`:** by booking code + new slot; re-creates Calendar, updates Sheets, emails. **`lookup_booking`:** read-only by code. **`lib/agent/toolHandlers.ts`** maps these to `callAdvisorMcpTool` calls.
 
 ```python
 FUNCTION_DEFINITIONS = [
-    # --- Phase 2: Intent detection ---
-    {
-        "name": "detect_intent",
-        "description": "Classify the caller's intent from their utterance",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "intent": {
-                    "type": "string",
-                    "enum": ["book_new", "reschedule", "cancel",
-                             "what_to_prepare", "check_availability", "unclear"]
-                },
-                "confidence": {"type": "number"},
-                "topic": {
-                    "type": "string",
-                    "enum": ["KYC/Onboarding", "SIP/Mandates",
-                             "Statements/Tax Docs", "Withdrawals & Timelines",
-                             "Account Changes/Nominee", "unknown"],
-                },
-                "time_preference": {"type": "string"}
-            },
-            "required": ["intent", "confidence"]
-        }
-    },
-    # --- Scheduling (Phase 2 MCP) ---
     {
         "name": "offer_slots",
-        "description": "Retrieve available advisor slots for the given topic and time preference",
+        "description": "Retrieve up to two free slots; time_preference 'any' for full-day scan",
         "parameters": {
             "type": "object",
             "properties": {
                 "topic": {"type": "string"},
-                "day": {"type": "string", "description": "today, tomorrow, or a date"},
-                "time_preference": {"type": "string", "description": "morning, afternoon, evening, or specific time"}
+                "day": {"type": "string"},
+                "time_preference": {"type": "string", "description": "any | morning | afternoon | evening | …"}
             },
             "required": ["topic", "day", "time_preference"]
         }
     },
     {
         "name": "confirm_booking",
-        "description": "Confirm the caller's slot selection and create the booking",
+        "description": "Confirm booking: offered slot keys OR explicit start_iso/end_iso",
         "parameters": {
             "type": "object",
             "properties": {
                 "topic": {"type": "string"},
                 "selected_slot_key": {"type": "string"},
-                "selected_slot_display": {"type": "string"}
+                "selected_slot_display": {"type": "string"},
+                "start_iso": {"type": "string"},
+                "end_iso": {"type": "string"}
             },
-            "required": ["topic", "selected_slot_key", "selected_slot_display"]
+            "required": ["topic", "selected_slot_display"]
         }
     },
-    # --- MCP tools (Phase 2) ---
     {
-        "name": "create_calendar_hold",
-        "description": "Create a tentative calendar hold for the confirmed booking",
+        "name": "cancel_booking",
+        "description": "Cancel booking by code. Deletes calendar event, updates Sheets, sends email if PII on file.",
         "parameters": {
             "type": "object",
             "properties": {"booking_code": {"type": "string"}},
@@ -336,23 +312,25 @@ FUNCTION_DEFINITIONS = [
         }
     },
     {
-        "name": "append_notes",
-        "description": "Append booking details to the Advisor Pre-Bookings notes",
-        "parameters": {
-            "type": "object",
-            "properties": {"booking_code": {"type": "string"}},
-            "required": ["booking_code"]
-        }
-    },
-    {
-        "name": "draft_email",
-        "description": "Draft an approval-gated email to the advisor with booking details",
+        "name": "reschedule_booking",
+        "description": "Reschedule booking: cancel old event, create new hold, update Sheets.",
         "parameters": {
             "type": "object",
             "properties": {
                 "booking_code": {"type": "string"},
-                "advisor_email": {"type": "string", "default": "advisor@nextleap.com"}
+                "new_start_iso": {"type": "string"},
+                "new_end_iso": {"type": "string"},
+                "new_slot_display": {"type": "string"}
             },
+            "required": ["booking_code", "new_start_iso", "new_end_iso", "new_slot_display"]
+        }
+    },
+    {
+        "name": "lookup_booking",
+        "description": "Read-only lookup by booking code",
+        "parameters": {
+            "type": "object",
+            "properties": {"booking_code": {"type": "string"}},
             "required": ["booking_code"]
         }
     },
@@ -962,6 +940,8 @@ async def _handle_waitlist(self, state: CallState, args: dict) -> str:
 
 **Canonical components:** [`phase-3-post-call-pii/`](../phase-3-post-call-pii/) — **`PiiBookingForm`**, lookup + submit libs. **Route:** `app/booking/[code]/page.tsx` imports from Phase 3.
 
+**Primary path (`app/agent/page.tsx`):** After `POST /api/agent/message` returns a new `secureLinkToken`, a **banner** appears at the top of the chat with the booking code and a **"Submit contact details"** button. The PII modal **does not auto-open** — the user clicks the button when ready. The modal mounts the same **`PiiBookingForm`** with `completionMode="callback"` — chat is non-interactive until the user **closes** the dialog (after success via "Back to chat"). `POST /api/agent/message` also returns **`slotDisplay`** and **`bookingTopic`** from session state for the modal subtitle. The banner persists until the session ends, so the user can open the form at any time. **UI theme:** light (white background, light sidebar, green accent). **End-chat flow:** on explicit keywords ("goodbye", "done", "exit"), a thank-you message + "New conversation" button appears.
+
 **File:** `app/booking/[code]/page.tsx` (thin route — re-exports / composes Phase 3 UI)
 
 ```tsx
@@ -1167,3 +1147,6 @@ Aligned with [architecture.md § 15](./architecture.md#15-open-questions).
 | 2026-04-12 | Both | §14 merge: Phase 3 = MCP (scheduling + side-effects); Phase 4 = PII; Next uses MCP client only for booking path; low-level synced | — |
 | 2026-04-12 | Both | Delivery order 1→3→4→2; folder↔phase mapping table; FastMCP as target MCP implementation; TS server = reference | — |
 | 2026-04-12 | Both | §14 + low-level: phases renumbered to implementation order (1 text, 2 MCP, 3 PII, 4 voice); §14 subsection order matches | — |
+| 2026-04-13 | Both | Slot policy: `any` full-day scan; confirm via ISO window; MCP free/busy before hold; Gmail draft failure excluded from `side_effects_completed`; `/agent` PII modal + API `slotDisplay`/`bookingTopic` | — |
+| 2026-04-13 | Both | New MCP tools: `cancel_booking`, `reschedule_booking`, `lookup_booking`; ChatGPT-themed UI; PII on-demand (no auto-open); chat stays open for multi-action; explicit end; Gmail draft on all actions; email send on PII submit or immediate if email on file for cancel/reschedule | — |
+| 2026-04-14 | Both | Bug fixes: duplicate booking guard (session-level), broader abort regex in `tryConfirmOfferedSlotIfResolved`, PII false-positive fix (removed over-broad patterns), tightened system prompt (no re-offer after confirm, PII-ready → point to button, never invent times, one-booking-per-session rule), time-preference centering for specific hours, Gmail error surfacing. UI: light theme, landing page → direct chat, "New conversation" button + end-chat flow. Removed unused `piiEmail` var in MCP server | — |

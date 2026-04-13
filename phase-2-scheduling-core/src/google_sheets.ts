@@ -7,20 +7,59 @@ import {
   getPiiSubmissionsTabName,
 } from "./env";
 import { getOAuthClient } from "./google_auth";
+import { buildA1Range } from "./sheetsA1";
 import type { BookingRowInput } from "./types";
 
-/** A1 notation tab — quote if name has spaces/special chars */
 function tabRange(tab: string, cellRange: string): string {
-  const safe = /[^a-zA-Z0-9_]/.test(tab)
-    ? `'${tab.replace(/'/g, "''")}'`
-    : tab;
-  return `${safe}!${cellRange}`;
+  return buildA1Range(tab, cellRange);
 }
 
 function spreadsheetId(): string {
   const id = process.env.GOOGLE_SHEETS_SPREADSHEET_ID?.trim();
   if (!id) throw new Error("GOOGLE_SHEETS_SPREADSHEET_ID is not set");
   return id;
+}
+
+/**
+ * Lists sheet tab titles and verifies required tabs exist (exact name match).
+ * Call once at MCP startup or when debugging "Unable to parse range".
+ */
+export async function validateSchedulingSpreadsheetTabs(): Promise<{
+  ok: boolean;
+  found: string[];
+  missing: string[];
+}> {
+  const auth = await getOAuthClient();
+  const sheets = google.sheets({ version: "v4", auth });
+  const res = await sheets.spreadsheets.get({
+    spreadsheetId: spreadsheetId(),
+    fields: "sheets.properties.title",
+  });
+  const found = (res.data.sheets ?? [])
+    .map((s) => s.properties?.title)
+    .filter((t): t is string => typeof t === "string" && t.length > 0);
+  const bookingsTab = getBookingsTabName();
+  const piiTab = getPiiSubmissionsTabName();
+  const configuredPre = process.env.GOOGLE_SHEETS_TAB_ADVISOR_PREBOOKINGS?.trim();
+  /** Without explicit tab env, accept legacy "Notes" or default "Advisor Pre-Bookings". */
+  const preBookingsOk =
+    configuredPre != null && configuredPre !== ""
+      ? found.includes(configuredPre)
+      : found.includes("Advisor Pre-Bookings") || found.includes("Notes");
+  const missing: string[] = [];
+  if (!found.includes(bookingsTab)) missing.push(bookingsTab);
+  if (!preBookingsOk) {
+    missing.push(
+      configuredPre ||
+        "Advisor Pre-Bookings (or set GOOGLE_SHEETS_TAB_ADVISOR_PREBOOKINGS / add a Notes tab)"
+    );
+  }
+  if (!found.includes(piiTab)) missing.push(piiTab);
+  return {
+    ok: missing.length === 0,
+    found,
+    missing,
+  };
 }
 
 /**
@@ -84,15 +123,18 @@ export function newSecureLinkToken(): string {
  * Append one log line: date summary, topic, slot text, booking_code (architecture §7 Advisor Pre-Bookings).
  * Row 1 should be headers e.g. date | topic | slot | code
  */
-export async function appendAdvisorPreBookingsLine(input: {
-  dateSummary: string;
-  topic: string;
-  slotDisplay: string;
-  booking_code: string;
-}): Promise<void> {
+async function appendAdvisorPreBookingsToTab(
+  tabTitle: string,
+  input: {
+    dateSummary: string;
+    topic: string;
+    slotDisplay: string;
+    booking_code: string;
+  }
+): Promise<void> {
   const auth = await getOAuthClient();
   const sheets = google.sheets({ version: "v4", auth });
-  const range = tabRange(getAdvisorPreBookingsTabName(), "A:D");
+  const range = tabRange(tabTitle, "A:D");
   await sheets.spreadsheets.values.append({
     spreadsheetId: spreadsheetId(),
     range,
@@ -109,6 +151,40 @@ export async function appendAdvisorPreBookingsLine(input: {
       ],
     },
   });
+}
+
+/**
+ * Append one log line: date summary, topic, slot text, booking_code.
+ * If the default tab "Advisor Pre-Bookings" is missing but a "Notes" tab exists (legacy layout),
+ * appends to "Notes" when `GOOGLE_SHEETS_TAB_ADVISOR_PREBOOKINGS` is unset.
+ */
+export async function appendAdvisorPreBookingsLine(input: {
+  dateSummary: string;
+  topic: string;
+  slotDisplay: string;
+  booking_code: string;
+}): Promise<void> {
+  const configured = process.env.GOOGLE_SHEETS_TAB_ADVISOR_PREBOOKINGS?.trim();
+  const primary = getAdvisorPreBookingsTabName();
+  try {
+    await appendAdvisorPreBookingsToTab(primary, input);
+    return;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    const badRange = msg.includes("Unable to parse range");
+    if (
+      badRange &&
+      !configured &&
+      primary === "Advisor Pre-Bookings"
+    ) {
+      console.warn(
+        "[appendAdvisorPreBookingsLine] Tab 'Advisor Pre-Bookings' not found; retrying with 'Notes'. Set GOOGLE_SHEETS_TAB_ADVISOR_PREBOOKINGS to your tab name to silence this."
+      );
+      await appendAdvisorPreBookingsToTab("Notes", input);
+      return;
+    }
+    throw e;
+  }
 }
 
 function padBookingCells(cells: unknown[] | undefined): string[] {

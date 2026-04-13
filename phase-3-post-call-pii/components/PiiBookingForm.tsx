@@ -20,11 +20,21 @@ function validateFields(input: {
   return errors;
 }
 
+export type PiiSubmitSuccessPayload = {
+  message: string;
+  user_email_sent?: boolean;
+  advisor_email_sent?: boolean;
+};
+
 export type PiiBookingFormProps = {
   bookingCode: string;
   secureLinkToken: string;
   topic: string;
   slotDisplay: string;
+  /** Default: go to /booking/[code]/confirmed */
+  completionMode?: "navigate" | "callback";
+  /** When completionMode is "callback", invoked on successful submit instead of navigating */
+  onSubmitted?: (payload: PiiSubmitSuccessPayload) => void;
 };
 
 export function PiiBookingForm({
@@ -32,6 +42,8 @@ export function PiiBookingForm({
   secureLinkToken,
   topic,
   slotDisplay,
+  completionMode = "navigate",
+  onSubmitted,
 }: PiiBookingFormProps) {
   const router = useRouter();
   const [name, setName] = useState("");
@@ -69,6 +81,30 @@ export function PiiBookingForm({
           }
         );
         if (res.status === 201) {
+          const data = (await res.json().catch(() => ({}))) as {
+            message?: string;
+            user_email_sent?: boolean;
+            advisor_email_sent?: boolean;
+          };
+          const parts: string[] = ["Your contact details were saved."];
+          if (data.user_email_sent) {
+            parts.push("A confirmation email was sent to the address you provided.");
+          }
+          if (data.advisor_email_sent) {
+            parts.push("The advisor team has been notified by email.");
+          }
+          const message =
+            typeof data.message === "string" && data.message.trim().length > 0
+              ? data.message
+              : parts.join(" ");
+          if (completionMode === "callback" && onSubmitted) {
+            onSubmitted({
+              message,
+              user_email_sent: data.user_email_sent,
+              advisor_email_sent: data.advisor_email_sent,
+            });
+            return;
+          }
           router.push(`/booking/${encodeURIComponent(bookingCode)}/confirmed`);
           return;
         }
@@ -88,7 +124,17 @@ export function PiiBookingForm({
         setSubmitting(false);
       }
     },
-    [account, bookingCode, email, name, phone, router, secureLinkToken]
+    [
+      account,
+      bookingCode,
+      completionMode,
+      email,
+      name,
+      onSubmitted,
+      phone,
+      router,
+      secureLinkToken,
+    ]
   );
 
   return (
@@ -187,9 +233,9 @@ export function PiiBookingForm({
 const inputStyle: CSSProperties = {
   padding: "10px 12px",
   borderRadius: 8,
-  border: "1px solid #2d3d52",
-  background: "#121a24",
-  color: "var(--text)",
+  border: "1px solid var(--input-border, #d1d1d1)",
+  background: "var(--input-bg, #ffffff)",
+  color: "var(--text, #1a1a1a)",
   fontSize: "1rem",
 };
 

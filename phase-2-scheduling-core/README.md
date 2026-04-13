@@ -36,6 +36,18 @@ All variables are documented in the repository root **[`.env.example`](../.env.e
 - Optional: `GOOGLE_SHEETS_TAB_BOOKINGS`, `GOOGLE_SHEETS_TAB_ADVISOR_PREBOOKINGS`, `ADVISOR_TIMEZONE`, `SLOT_DURATION_MINUTES`
 - Gmail: `GMAIL_DELEGATED_USER`, `ADVISOR_INBOX_EMAIL` (plus delegation setup)
 
+## Google Sheets — troubleshooting `Unable to parse range: Bookings!A:A`
+
+That API error usually means one of:
+
+1. **The tab does not exist** under the exact name the app uses (names are **case-sensitive**). Defaults: `Bookings`, `Advisor Pre-Bookings`, `PII_Submissions`. If your sheet uses different titles, set `GOOGLE_SHEETS_TAB_BOOKINGS`, `GOOGLE_SHEETS_TAB_ADVISOR_PREBOOKINGS`, and `GOOGLE_SHEETS_TAB_PII` in `.env` to match **character-for-character**. If you use a **`Notes`** tab instead of `Advisor Pre-Bookings` and have **not** set `GOOGLE_SHEETS_TAB_ADVISOR_PREBOOKINGS`, the MCP server will append pre-booking lines to `Notes` automatically (and tab validation treats `Notes` as satisfying the pre-bookings requirement).
+2. **Wrong spreadsheet** — `GOOGLE_SHEETS_SPREADSHEET_ID` must be the file that contains those tabs.
+3. **Access** — the spreadsheet must be shared with the **service account** email (Editor).
+
+The MCP server logs which tabs were found vs missing when scheduling env is configured. From the repo root you can run **`npm run verify:sheets-tabs`** to list tabs and required names without starting the app.
+
+Ranges are built with proper A1 quoting (`'Sheet Name'!A:A`); unit tests: **`npm run test:phase2-sheets-a1`**.
+
 ## Google Sheets — `Bookings` header row
 
 Share the spreadsheet with the **service account email** (Editor). Row 1 columns:

@@ -75,16 +75,17 @@ graph TD
 ## 4. Component Breakdown
 
 #### Web Agent UI (Primary)
-**Responsibility:** Hosts the agent session: **Step 1** text chat; **Step 2** **voice** (mic, playback) on the same page—**no Twilio**. After a booking completes, the session UI shows **session summary** and a **copyable booking ID** only — **no** manual “send test”, “notify advisor”, or other email controls (you can change this later if needed).
+**Responsibility:** Hosts the agent session: **Step 1** text chat; **Step 2** **voice** (mic, playback) on the same page—**no Twilio**. Homepage (`/`) redirects to `/agent` — no separate landing page. After a **confirmed** booking, a banner with the booking code and **"Submit contact details"** button appears (PII modal **does not auto-open**). The user clicks the button when ready; the modal collects PII (booking ID pre-filled, read-only); the chat thread stays **inactive** until the user closes the dialog. On successful PII submit, a "Thank you" screen shows email-sent details with a **"Back to chat"** button. When the user ends the session ("goodbye", "done", "exit"), a thank-you message appears with a **"New conversation"** button. **No** manual "send test" or ad-hoc advisor controls in-session. **One booking per session** — duplicate `confirm_booking` calls are blocked server-side.
+**Scheduling behavior:** `offer_slots` returns **two example** free windows when the user has **not** narrowed a time-of-day (`time_preference` **`any`** scans roughly 09:00–22:00 IST that day). The user may **instead** name another time the same day; `confirm_booking` accepts **`start_iso` / `end_iso`** for that window after a **free/busy** check (not limited to the two listed slots). MCP **`confirm_booking`** validates the interval is free before writing; **`side_effects_completed`** treats Gmail draft **failure** separately from success (draft id string).
 **Technology:** Next.js 14 (App Router) on **Vercel** — same project as the Agent API (monolith). No custom domain required; default `*.vercel.app` is fine.
-**Interfaces:** `POST /api/agent/message` (text); WebSocket or chunked audio for voice (see low-level doc). Session end: **copyable booking ID** + link or CTA to the post-call PII flow.
+**Interfaces:** `POST /api/agent/message` (text; response may include `bookingCode`, `secureLinkToken`, `slotDisplay`, `bookingTopic` for the modal); WebSocket or chunked audio for voice (see low-level doc). Standalone PII page `/booking/[code]` remains available for deep links.
 **Scaling strategy:** Vercel Edge + serverless/Node runtime; voice WebSockets may require **Node runtime** (not Edge) for the streaming route — see low-level doc.
 **Owner / repo:** `app/` within the Next.js project
 
 #### Post-call PII UI (Secondary — required)
-**Responsibility:** After the agent session, collects PII in a dedicated flow (booking code + encrypted fields). On successful submit: **send user confirmation email**, **auto-send advisor notification** (finalize the advisor draft / send via Gmail API), and show **in-app success notification**.
-**Technology:** Same Next.js app on Vercel (e.g. `app/booking/[code]`).
-**Interfaces:** `POST /api/booking/{code}/submit`; success → redirect and/or toast with confirmation copy.
+**Responsibility:** After the agent issues a booking code + secure token, collects PII in a **modal on `/agent`** (primary) or the dedicated **`/booking/[code]`** page (same form component). On successful submit: **send user confirmation email**, **auto-send advisor notification** (finalize the advisor draft / send via Gmail API), and show **in-modal success copy** (email-sent lines mirror MCP flags). **Cancellation / other actions:** reuse the same pattern—blocking dialog + success summary—when those flows are wired (tooling TBD).
+**Technology:** Same Next.js app on Vercel (`app/agent/page.tsx`, `app/booking/[code]`).
+**Interfaces:** `POST /api/booking/{code}/submit`; in-app modal uses **callback** completion; standalone page redirects to confirmed.
 **Owner / repo:** `app/booking/` + `app/api/booking/`
 
 #### Agent API (Backend on Vercel)
@@ -129,7 +130,7 @@ graph TD
 
 #### Groq LLM (OpenAI-compatible)
 **Responsibility:** Intent classification, dialog response generation, and MCP tool call decisions based on conversation context and system prompt.
-**Technology:** **Groq-hosted models** (e.g. Llama 3.3) via **`POST /v1/chat/completions`** with **tools** / function calling — same logical tools as in `lib/agent/llmTools.ts` (`detect_intent`, `offer_slots`, `confirm_booking`). **`GROQ_MODEL`** and **`GROQ_API_KEY`** in env (see [`.env.example`](../.env.example)).
+**Technology:** **Groq-hosted models** (e.g. Llama 3.3) via **`POST /v1/chat/completions`** with **tools** / function calling — same logical tools as in `lib/agent/llmTools.ts` (`offer_slots`, `confirm_booking`; intent is inferred in prose, not a separate tool). **`GROQ_MODEL`** and **`GROQ_API_KEY`** in env (see [`.env.example`](../.env.example)).
 **Interfaces:** OpenAI SDK pointed at Groq `baseURL`; assistant messages may include `tool_calls`; results returned as `role: tool` follow-ups until the model emits final user-facing text.
 **Scaling strategy:** Managed API — Groq rate limits; exponential backoff on 429 (`LLM_MAX_RETRIES`). Target: low latency suitable for conversational turns.
 **Owner / repo:** `lib/agent/llm.ts`, `lib/agent/llmTools.ts`
@@ -432,21 +433,25 @@ flowchart TB
 | `/voice/incoming` | POST | **Optional** — Twilio TwiML |
 | `/voice/stream` | WebSocket | **Optional** — Twilio Media Streams |
 
-**MCP Tools:**
+**MCP Tools (registered in `phase-2-scheduling-core/mcp/advisor-mcp-server.ts`):**
 
-| Tool Name | Description | Idempotency |
-|-----------|-------------|-------------|
-| `create_calendar_event` / `create_calendar_hold` | Creates or updates a **Google Calendar** event for the booking | Keyed on `booking_code` |
-| `append_notes` | Appends booking details (Sheets **Notes** tab or column) | Keyed on `booking_code` |
-| `draft_email` | Creates advisor Gmail **draft** only — **no send** until PII submit | Keyed on `booking_code` |
-| `send_user_confirmation_email` | After PII submit — to end user | Keyed on `booking_code`; idempotent |
-| `send_advisor_notification` | After PII submit — finalize advisor draft / send | Keyed on `booking_code`; idempotent |
+| Tool Name | Description | When |
+|-----------|-------------|------|
+| `offer_slots` | Returns up to two free calendar windows (IST) for a day/topic; `time_preference "any"` scans 9–22 IST | User asks to book or check availability |
+| `confirm_booking` | Calendar hold + Sheets row + Advisor Pre-Bookings + Gmail **draft** → booking code + secure token | User picks or specifies a slot |
+| `cancel_booking` | Delete Calendar event, Sheets status → `cancelled`, Gmail draft, send cancel email if PII on file | User requests cancel (by booking code) |
+| `reschedule_booking` | Delete old Calendar event, create new hold, update Sheets, Gmail draft, send email if PII on file | User requests reschedule (code + new slot) |
+| `lookup_booking` | Read-only lookup by code → status, topic, slot, `pii_submitted` | Before cancel/reschedule to verify |
+| `lookup_pii_booking` | Validate code + secure token for PII page | PII page load |
+| `submit_pii_booking` | Encrypt PII → Sheets, mark `pii_submitted`, patch Calendar attendee, **send** user + advisor emails | User submits PII form |
+
+**Email timing:** Gmail **drafts** are created on booking, cancel, or reschedule (for advisor review). Actual **sends** happen: (a) on PII submit (user confirmation + advisor notification for new bookings), or (b) immediately on cancel/reschedule if user email is already on file from a prior PII submit.
 
 ## 9. UI Architecture
 
 **UI delivery milestones (UI-1–UI-4)** are listed under **§14** (*Delivery tracks*). This section describes stack, screens, and components.
 
-The **primary** UI is the **Web Agent** page: **Step 1** text chat; **Step 2** same page with **mic + speaker** (browser voice — **no Twilio**). **After the session:** **copyable booking ID** only on the session panel (**no** manual send controls). **Secondary (required):** **post-call PII** flow; on submit → **user email** + **advisor auto-send** + **on-screen notification**.
+The **primary** UI is the **Web Agent** page (`/agent`) with a **clean light-themed** layout: light sidebar, centered thread, rounded send button, avatar circles, white background. The homepage (`/`) redirects directly to `/agent` — no separate landing page. The chat stays **open for multiple actions** (book, cancel, reschedule, check, prepare) until the user explicitly ends (e.g. "goodbye", "done", "exit"). On end, a **"Thank you"** message appears with a **"New conversation"** button; the sidebar also has a **"New conversation"** button at all times. After a **confirmed** booking, the banner shows the booking code + **"Submit contact details"** button (PII form **does not auto-open**). PII modal opens **on demand**, and after successful submit shows a thank-you with email-sent details, then **"Back to chat"**. Chat input is disabled while the PII dialog is open. **One booking per session** — duplicate `confirm_booking` calls are blocked server-side; the user must start a new flow (via `offer_slots`) for a second booking. Standalone PII page (`/booking/[code]`) remains available for deep links.
 
 #### 9a. UI Stack
 

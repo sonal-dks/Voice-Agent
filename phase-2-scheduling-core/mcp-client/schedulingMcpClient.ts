@@ -96,6 +96,9 @@ export async function callAdvisorMcpTool(
   name:
     | "offer_slots"
     | "confirm_booking"
+    | "cancel_booking"
+    | "reschedule_booking"
+    | "lookup_booking"
     | "submit_pii_booking"
     | "lookup_pii_booking",
   args: Record<string, unknown>

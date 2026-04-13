@@ -34,6 +34,9 @@ export async function POST(req: Request) {
       messages: out.messages,
       bookingCode: out.bookingCode ?? null,
       secureLinkToken: out.secureLinkToken ?? null,
+      slotDisplay: out.slotDisplay ?? null,
+      bookingTopic: out.bookingTopic ?? null,
+      bookingJustConfirmed: out.bookingJustConfirmed ?? false,
     });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Internal error";

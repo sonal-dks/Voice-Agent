@@ -4,7 +4,11 @@ import { offlineAssistantReply } from "./offlinePhase1";
 import { groqAgentTools } from "./llmTools";
 import { SYSTEM_INSTRUCTION } from "./prompts";
 import type { SessionState } from "./state";
-import { executeToolCall } from "./toolHandlers";
+import {
+  executeToolCall,
+  formatConfirmUserMessage,
+  formatOfferSlotsReplyForUser,
+} from "./toolHandlers";
 
 function getGroqClient() {
   const key = process.env.GROQ_API_KEY?.trim();
@@ -102,6 +106,14 @@ function llmErrorText(e: unknown): string {
   return String(e);
 }
 
+function isGroqToolUseFailed(e: unknown): boolean {
+  const t = llmErrorText(e);
+  return (
+    t.includes("tool_use_failed") ||
+    t.includes("tool call validation failed")
+  );
+}
+
 function userFacingLlmFailure(e: unknown): string {
   if (e instanceof Error && e.message === "LLM_TIMEOUT") {
     return "The assistant took too long to respond. Please try again — you can raise LLM_TIMEOUT_MS in .env if this keeps happening.";
@@ -134,6 +146,9 @@ function userFacingLlmFailure(e: unknown): string {
   ) {
     return "Groq rate-limited this request. Wait a short time and try again, or switch to a lighter GROQ_MODEL.";
   }
+  if (m.includes("tool_use_failed") || m.includes("tool call validation failed")) {
+    return "The assistant hit a temporary formatting issue with the AI provider. Please send your message again. If it repeats, try another GROQ_MODEL in .env (e.g. llama-3.1-8b-instant).";
+  }
   return "I'm having trouble reaching the assistant right now. Please try again in a moment.";
 }
 
@@ -144,6 +159,38 @@ function historyToMessages(
     role: h.role === "user" ? ("user" as const) : ("assistant" as const),
     content: h.text,
   }));
+}
+
+/** Models sometimes emit fake `<function=name>{json}</function>` in content; that does not invoke tools. Strip for display. */
+function stripLeakedFunctionMarkup(text: string): string {
+  return text
+    .replace(/<function=offer_slots>\s*\{[\s\S]*?\}\s*<\/function>/gi, "")
+    .replace(/<function=offer_slots=\{[\s\S]*?\}\s*><\/function>/gi, "")
+    .replace(/<function=confirm_booking>\s*\{[\s\S]*?\}\s*<\/function>/gi, "")
+    .replace(/<function=confirm_booking=\{[\s\S]*?\}\s*><\/function>/gi, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function tryParseLeakedToolJson(
+  content: string,
+  name: "offer_slots" | "confirm_booking"
+): Record<string, unknown> | null {
+  const patterns = [
+    new RegExp(`<function=${name}>\\s*(\\{[\\s\\S]*?\\})\\s*</function>`, "i"),
+    new RegExp(`<function=${name}=(\\{[\\s\\S]*?\\})\\s*></function>`, "i"),
+  ];
+  for (const re of patterns) {
+    const m = content.match(re);
+    if (m?.[1]) {
+      try {
+        return JSON.parse(m[1]) as Record<string, unknown>;
+      } catch {
+        /* try next pattern */
+      }
+    }
+  }
+  return null;
 }
 
 /**
@@ -170,21 +217,54 @@ export async function generateAssistantReply(
     ];
 
     const maxIters = 8;
+    let didGroqToolSyntaxRetry = false;
+
+    const TOOL_SYNTAX_RETRY_SUFFIX =
+      "\n\n[System — retry after provider error] Your previous assistant completion was rejected: you must not put tool calls, XML, <function=...>, or JSON tools inside the visible message text. Write only normal user-facing sentences. Use offer_slots / confirm_booking only through the API tool channel, not in the text body.";
 
     for (let i = 0; i < maxIters; i++) {
-      const completion = await chatCompletionWith429Retries(
-        client,
-        {
-          model,
-          messages: [
-            { role: "system", content: SYSTEM_INSTRUCTION },
-            ...thread,
-          ],
-          tools: groqAgentTools,
-          tool_choice: "auto",
-        },
-        timeoutMs
-      );
+      const baseMessages: OpenAI.Chat.ChatCompletionMessageParam[] = [
+        { role: "system", content: SYSTEM_INSTRUCTION },
+        ...thread,
+      ];
+
+      let completion: OpenAI.Chat.ChatCompletion;
+      try {
+        completion = await chatCompletionWith429Retries(
+          client,
+          {
+            model,
+            messages: baseMessages,
+            tools: groqAgentTools,
+            tool_choice: "auto",
+            parallel_tool_calls: false,
+          },
+          timeoutMs
+        );
+      } catch (e) {
+        if (isGroqToolUseFailed(e) && !didGroqToolSyntaxRetry) {
+          didGroqToolSyntaxRetry = true;
+          completion = await chatCompletionWith429Retries(
+            client,
+            {
+              model,
+              messages: [
+                {
+                  role: "system",
+                  content: SYSTEM_INSTRUCTION + TOOL_SYNTAX_RETRY_SUFFIX,
+                },
+                ...thread,
+              ],
+              tools: groqAgentTools,
+              tool_choice: "auto",
+              parallel_tool_calls: false,
+            },
+            timeoutMs
+          );
+        } else {
+          throw e;
+        }
+      }
 
       const choice = completion.choices[0];
       const msg = choice?.message;
@@ -226,7 +306,38 @@ export async function generateAssistantReply(
         continue;
       }
 
-      const text = (msg.content ?? "").trim();
+      const contentFull = msg.content ?? "";
+
+      // Groq/Llama may put `<function=offer_slots>{...}</function>` in prose instead of native tool_calls — execute here.
+      const leakedConfirm = tryParseLeakedToolJson(contentFull, "confirm_booking");
+      if (leakedConfirm && session.offeredSlots?.length) {
+        console.warn("[llm] Repaired leaked confirm_booking markup in model text");
+        const toolResult = await executeToolCall(
+          "confirm_booking",
+          leakedConfirm,
+          session
+        );
+        const cleaned = stripLeakedFunctionMarkup(contentFull);
+        const confirmPart = formatConfirmUserMessage(toolResult);
+        const parts = [cleaned, confirmPart].filter((x) => x.length > 0);
+        return parts.join("\n\n") || confirmPart;
+      }
+
+      const leakedOffer = tryParseLeakedToolJson(contentFull, "offer_slots");
+      if (leakedOffer) {
+        console.warn("[llm] Repaired leaked offer_slots markup in model text");
+        const toolResult = await executeToolCall(
+          "offer_slots",
+          leakedOffer,
+          session
+        );
+        const cleaned = stripLeakedFunctionMarkup(contentFull);
+        const offerPart = formatOfferSlotsReplyForUser(toolResult);
+        const parts = [cleaned, offerPart].filter((x) => x.length > 0);
+        return parts.join("\n\n") || offerPart;
+      }
+
+      const text = stripLeakedFunctionMarkup(contentFull).trim();
       return (
         text ||
         "I'm here to help you book an advisor consultation. What would you like to do?"

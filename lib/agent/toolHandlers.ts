@@ -10,9 +10,22 @@ import type { IntentKind, SessionState } from "./state";
 function redactSecureLinkTokenForLlm(
   raw: Record<string, unknown>
 ): Record<string, unknown> {
-  if (!("secure_link_token" in raw)) return raw;
-  const { secure_link_token: _t, ...rest } = raw;
-  return rest;
+  let out = raw;
+  if ("secure_link_token" in out) {
+    const { secure_link_token: _t, ...rest } = out;
+    out = rest;
+  }
+  if ("calendar_error" in out) {
+    const { calendar_error: _c, ...rest } = out;
+    out = rest;
+  }
+  if (typeof out.advisor_gmail_draft === "string" && out.advisor_gmail_draft === "failed") {
+    console.warn("[toolHandlers] Gmail draft failed for this booking — check GMAIL_OAUTH_* or GMAIL_DELEGATED_USER env vars");
+  }
+  if (Array.isArray(out.email_errors) && (out.email_errors as string[]).length > 0) {
+    console.warn("[toolHandlers] Email errors:", out.email_errors);
+  }
+  return out;
 }
 
 export function handleDetectIntent(args: Record<string, unknown>): {
@@ -39,6 +52,170 @@ function slotsFromMcp(raw: unknown): OfferedSlot[] | undefined {
       endIso: String(o.endIso ?? ""),
     };
   });
+}
+
+/** e.g. "5:30pm" from "5:30 PM IST" or "Apr 13, 5:30 PM" */
+function timeFingerprint(s: string): string | null {
+  const m = s.match(/(\d{1,2}):(\d{2})\s*(am|pm)/i);
+  if (!m) return null;
+  const h = parseInt(m[1], 10);
+  const min = m[2];
+  const ap = m[3].toLowerCase();
+  return `${h}:${min}${ap}`;
+}
+
+/** Strip trailing ack words so "…9:00 AM IST WORKS" matches slot display */
+function normalizeUserSlotChoice(text: string): string {
+  return text
+    .trim()
+    .replace(/\s*(works|work|great|perfect|sounds good|ok|yes|please|thanks|thank you)\s*!*$/gi, "")
+    .trim();
+}
+
+/**
+ * LLMs often pass the friendly time as key or wrong shape; avoid confirm loops.
+ */
+function resolveOfferedSlot(
+  slots: OfferedSlot[],
+  selected_slot_key: string,
+  selected_slot_display: string
+): OfferedSlot | undefined {
+  if (slots.length === 0) return undefined;
+
+  const keyTrim = selected_slot_key.trim();
+  const dispTrim = selected_slot_display.trim();
+  const kd = normalizeUserSlotChoice(keyTrim);
+  const dd = normalizeUserSlotChoice(dispTrim);
+
+  let s = slots.find((x) => x.key === keyTrim || x.startIso === keyTrim);
+  if (s) return s;
+
+  const norm = (t: string) =>
+    t.toLowerCase().replace(/\s+/g, " ").trim();
+
+  const combined = norm(`${kd} ${dd}`);
+  if (combined.length >= 10) {
+    const byFullDisplay = slots.filter((x) => combined.includes(norm(x.display)));
+    if (byFullDisplay.length === 1) return byFullDisplay[0];
+  }
+
+  function pickByIndex(label: string): number | undefined {
+    const lower = label.toLowerCase();
+    if (
+      /^(1|first|one|option\s*1|the\s*first)$/i.test(lower) ||
+      lower === "1."
+    )
+      return 0;
+    if (
+      /^(2|second|two|option\s*2|the\s*second)$/i.test(lower) ||
+      lower === "2."
+    )
+      return 1;
+    return undefined;
+  }
+
+  const ki = pickByIndex(keyTrim) ?? pickByIndex(kd);
+  if (ki !== undefined && ki < slots.length) return slots[ki];
+  const di = pickByIndex(dispTrim) ?? pickByIndex(dd);
+  if (di !== undefined && di < slots.length) return slots[di];
+
+  const userFp =
+    timeFingerprint(dd) ||
+    timeFingerprint(kd) ||
+    timeFingerprint(dispTrim) ||
+    timeFingerprint(keyTrim) ||
+    timeFingerprint(`${dispTrim} ${keyTrim}`);
+  if (userFp) {
+    const matches = slots.filter((x) => {
+      const fp = timeFingerprint(x.display);
+      return fp === userFp;
+    });
+    if (matches.length === 1) return matches[0];
+  }
+
+  const nd = norm(dd) || norm(kd) || norm(dispTrim) || norm(keyTrim);
+  if (nd.length >= 4) {
+    s = slots.find(
+      (x) =>
+        norm(x.display).includes(nd) ||
+        nd.includes(norm(x.display)) ||
+        norm(x.key).includes(nd)
+    );
+    if (s) return s;
+  }
+
+  if (slots.length === 1 && (!keyTrim || !dispTrim)) return slots[0];
+
+  return undefined;
+}
+
+const ABORT_SLOT_CHOICE =
+  /abort|cancel|never\s*mind|don'?t book|different\s*topic|change\s*(the\s*)?(day|time|date)|another\s*day|not those|none of these|end\s*(the\s*)?chat|bye|goodbye|exit|done|no\s*thanks|nothing\s*else|that'?s\s*all|submit|contact\s*details|form|pii|ready\s*to\s*submit|already\s*been\s*booked|it'?s\s*already|already\s*booked|reschedule|look\s*up/i;
+
+export function formatConfirmUserMessage(raw: Record<string, unknown>): string {
+  if (raw.ok === true) {
+    const m = String(raw.message ?? "Your booking is confirmed.");
+    const code = raw.booking_code != null ? String(raw.booking_code) : "";
+    if (code.length > 0 && !m.includes(code)) {
+      return `${m}\n\nBooking code: ${code}`;
+    }
+    return m;
+  }
+  return String(
+    raw.message ?? raw.error ?? "Could not complete the booking. Please try again."
+  );
+}
+
+/** User-facing text after a real offer_slots tool result (not the LLM-only hint string). */
+export function formatOfferSlotsReplyForUser(raw: Record<string, unknown>): string {
+  if (raw.ok === false) {
+    return String(raw.message ?? raw.error ?? "Couldn't load calendar slots.");
+  }
+  if (raw.waitlist === true && raw.booking_code) {
+    const code = String(raw.booking_code);
+    const extra = String(raw.message ?? "").trim();
+    return `No openings in that window right now — you're on the waitlist. Booking code: ${code}.${extra ? ` ${extra}` : ""}`;
+  }
+  const slots = raw.slots;
+  if (Array.isArray(slots) && slots.length > 0) {
+    const lines = slots.map((s: unknown, i: number) => {
+      const o = s as Record<string, unknown>;
+      return `${i + 1}. ${String(o.display ?? o.key ?? "")}`;
+    });
+    return `Here are two free slots that day (IST):\n${lines.join("\n")}\n\nIf one of these works, say which. If you wanted a different time on that day, say the time — we can book it if the calendar is free (not limited to only these two).`;
+  }
+  return String(raw.message ?? "No slots returned.");
+}
+
+/**
+ * When slots are already offered, detect a concrete choice in the user message
+ * and confirm without calling the LLM (avoids offer_slots / confirm loops).
+ */
+export async function tryConfirmOfferedSlotIfResolved(
+  session: SessionState,
+  userText: string
+): Promise<string | null> {
+  const offered = session.offeredSlots;
+  if (!offered || offered.length === 0) return null;
+  if (ABORT_SLOT_CHOICE.test(userText)) return null;
+
+  const cleaned = normalizeUserSlotChoice(userText.trim());
+  const slot =
+    resolveOfferedSlot(offered, "", cleaned) ??
+    resolveOfferedSlot(offered, cleaned, cleaned);
+
+  if (!slot) return null;
+
+  const raw = await handleConfirmBooking(
+    {
+      topic: String(session.bookingTopic ?? ""),
+      selected_slot_key: slot.key,
+      selected_slot_display: slot.display,
+    },
+    session
+  );
+
+  return formatConfirmUserMessage(raw);
 }
 
 /**
@@ -90,9 +267,16 @@ export async function handleOfferSlots(
   args: Record<string, unknown>,
   session: SessionState
 ): Promise<Record<string, unknown>> {
+  // When offer_slots is called for a new booking, clear the previous booking guard
+  if (session.lastBookingCode) {
+    session.lastBookingCode = null;
+    session.lastSecureLinkToken = null;
+    session.lastSlotDisplay = null;
+  }
+
   const topic = String(args.topic ?? "");
   const day = String(args.day ?? "tomorrow");
-  const time_preference = String(args.time_preference ?? "afternoon");
+  const time_preference = String(args.time_preference ?? "any");
 
   if (!schedulingMcpServerAvailable() || !schedulingCredentialsPresent()) {
     return {
@@ -115,6 +299,9 @@ export async function handleOfferSlots(
       session.offeredSlots = undefined;
       if (raw.booking_code) session.lastBookingCode = String(raw.booking_code);
       if (raw.secure_link_token) session.lastSecureLinkToken = String(raw.secure_link_token);
+      if (typeof raw.slot_display === "string" && raw.slot_display.trim()) {
+        session.lastSlotDisplay = raw.slot_display.trim();
+      }
       return redactSecureLinkTokenForLlm(raw);
     }
 
@@ -122,10 +309,16 @@ export async function handleOfferSlots(
       const slots = slotsFromMcp(raw.slots);
       if (slots?.length) {
         session.offeredSlots = slots;
+        const slotChoices = slots.map((x, i) => ({
+          list_number: i + 1,
+          key: x.key,
+          display: x.display,
+        }));
         return {
           ...raw,
+          slot_choices_for_confirm: slotChoices,
           message:
-            "List BOTH slot displays to the user (IST). Ask which they prefer. When they choose, call confirm_booking with the matching selected_slot_key and selected_slot_display.",
+            "List BOTH slot lines (IST). If they choose one of these, call confirm_booking with selected_slot_key/display from slot_choices_for_confirm. If they ask for a different time on the same day that was NOT one of the two (e.g. a specific hour), call confirm_booking with start_iso and end_iso for that window (duration = typical slot length, e.g. 30 min) — do not force them to pick only from the two. If they say 'second' or '5:30 PM' matching an offer, use selected_slot_key/display as before.",
         };
       }
     }
@@ -156,9 +349,19 @@ export async function handleConfirmBooking(
   args: Record<string, unknown>,
   session: SessionState
 ): Promise<Record<string, unknown>> {
+  if (session.lastBookingCode) {
+    return {
+      ok: false,
+      error: "already_booked",
+      message: `A booking (${session.lastBookingCode}) is already confirmed in this session. Tell the user their booking code and that the contact details form is on the page. If they want another booking, they should say so explicitly. Do not create a second booking.`,
+    };
+  }
+
   const topic = String(args.topic ?? session.bookingTopic ?? "");
   const selected_slot_key = String(args.selected_slot_key ?? "");
   const selected_slot_display = String(args.selected_slot_display ?? "");
+  const start_iso = String(args.start_iso ?? "").trim();
+  const end_iso = String(args.end_iso ?? "").trim();
 
   if (!schedulingMcpServerAvailable() || !schedulingCredentialsPresent()) {
     return {
@@ -168,34 +371,31 @@ export async function handleConfirmBooking(
     };
   }
 
-  const slot = session.offeredSlots?.find((s) => s.key === selected_slot_key);
-  if (!slot) {
-    return {
-      ok: false,
-      error: "invalid_slot",
-      message:
-        "No matching offered slot. Call offer_slots again, then confirm using the tool-returned slot keys.",
-    };
-  }
+  const linkHint =
+    " A contact-details form is available on this page whenever the user is ready — do not collect email, phone, or account numbers in this conversation. Ask if they need anything else.";
 
-  try {
+  const runConfirm = async (payload: {
+    slot_display: string;
+    startIso: string;
+    endIso: string;
+  }) => {
     const raw = await callAdvisorMcpTool("confirm_booking", {
       topic,
-      slot_display: selected_slot_display || slot.display,
-      startIso: slot.startIso,
-      endIso: slot.endIso,
+      slot_display: payload.slot_display,
+      startIso: payload.startIso,
+      endIso: payload.endIso,
     });
 
     if (raw.ok === true && raw.booking_code) {
       session.lastBookingCode = String(raw.booking_code);
+      session.lastSlotDisplay = String(
+        raw.slot_display ?? payload.slot_display
+      );
       session.offeredSlots = undefined;
     }
     if (raw.ok === true && raw.secure_link_token) {
       session.lastSecureLinkToken = String(raw.secure_link_token);
     }
-
-    const linkHint =
-      " A secure link to enter contact details appears on this page below the chat — do not collect email, phone, or account numbers in this conversation.";
 
     if (raw.ok === true) {
       const safe = redactSecureLinkTokenForLlm(raw);
@@ -205,9 +405,138 @@ export async function handleConfirmBooking(
       };
     }
     return redactSecureLinkTokenForLlm(raw);
+  };
+
+  if (start_iso && end_iso) {
+    try {
+      return await runConfirm({
+        slot_display: selected_slot_display || start_iso,
+        startIso: start_iso,
+        endIso: end_iso,
+      });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error("[confirm_booking mcp]", msg);
+      return { ok: false, error: msg };
+    }
+  }
+
+  const offered = session.offeredSlots ?? [];
+  const slot = resolveOfferedSlot(
+    offered,
+    selected_slot_key,
+    selected_slot_display
+  );
+  if (!slot) {
+    const hint =
+      offered.length > 0
+        ? `Offered slots (do not call offer_slots again unless user changes day/topic): ${JSON.stringify(
+            offered.map((x, i) => ({
+              list_number: i + 1,
+              key: x.key,
+              display: x.display,
+            }))
+          )}. Call confirm_booking with selected_slot_key set to the correct \`key\` for the user's choice, or if they want a different time on that day, use start_iso and end_iso (ISO 8601) plus selected_slot_display.`
+        : "No slots in session. Call offer_slots first, or use confirm_booking with start_iso and end_iso if the user specified an exact window.";
+    return {
+      ok: false,
+      error: "invalid_slot",
+      message: hint,
+    };
+  }
+
+  try {
+    return await runConfirm({
+      slot_display: selected_slot_display || slot.display,
+      startIso: slot.startIso,
+      endIso: slot.endIso,
+    });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     console.error("[confirm_booking mcp]", msg);
+    return { ok: false, error: msg };
+  }
+}
+
+export async function handleCancelBooking(
+  args: Record<string, unknown>,
+  session: SessionState
+): Promise<Record<string, unknown>> {
+  const booking_code = String(args.booking_code ?? "").trim();
+  if (!booking_code) {
+    return { ok: false, error: "missing_code", message: "Ask the user for their booking code." };
+  }
+  if (!schedulingMcpServerAvailable() || !schedulingCredentialsPresent()) {
+    return { ok: false, error: "mcp_or_env_missing", message: "Scheduling MCP is not available." };
+  }
+  try {
+    const raw = await callAdvisorMcpTool("cancel_booking", { booking_code });
+    if (raw.ok === true) {
+      session.lastBookingCode = null;
+      session.lastSecureLinkToken = null;
+      session.lastSlotDisplay = null;
+      session.offeredSlots = undefined;
+    }
+    return raw;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { ok: false, error: msg };
+  }
+}
+
+export async function handleRescheduleBooking(
+  args: Record<string, unknown>,
+  session: SessionState
+): Promise<Record<string, unknown>> {
+  const booking_code = String(args.booking_code ?? "").trim();
+  const new_start_iso = String(args.new_start_iso ?? "").trim();
+  const new_end_iso = String(args.new_end_iso ?? "").trim();
+  const new_slot_display = String(args.new_slot_display ?? "").trim();
+
+  if (!booking_code) {
+    return { ok: false, error: "missing_code", message: "Ask the user for their booking code." };
+  }
+  if (!new_start_iso || !new_end_iso) {
+    return {
+      ok: false,
+      error: "missing_slot",
+      message: "Call offer_slots first to find a new time, then call reschedule_booking with the new slot details.",
+    };
+  }
+  if (!schedulingMcpServerAvailable() || !schedulingCredentialsPresent()) {
+    return { ok: false, error: "mcp_or_env_missing", message: "Scheduling MCP is not available." };
+  }
+  try {
+    const raw = await callAdvisorMcpTool("reschedule_booking", {
+      booking_code,
+      new_startIso: new_start_iso,
+      new_endIso: new_end_iso,
+      new_slot_display: new_slot_display || new_start_iso,
+    });
+    if (raw.ok === true) {
+      session.lastSlotDisplay = new_slot_display || null;
+    }
+    return raw;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return { ok: false, error: msg };
+  }
+}
+
+export async function handleLookupBooking(
+  args: Record<string, unknown>
+): Promise<Record<string, unknown>> {
+  const booking_code = String(args.booking_code ?? "").trim();
+  if (!booking_code) {
+    return { ok: false, error: "missing_code", message: "Ask for the booking code." };
+  }
+  if (!schedulingMcpServerAvailable() || !schedulingCredentialsPresent()) {
+    return { ok: false, error: "mcp_or_env_missing", message: "Scheduling MCP is not available." };
+  }
+  try {
+    return await callAdvisorMcpTool("lookup_booking", { booking_code });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
     return { ok: false, error: msg };
   }
 }
@@ -224,6 +553,12 @@ export async function executeToolCall(
       return handleOfferSlots(args, session);
     case "confirm_booking":
       return handleConfirmBooking(args, session);
+    case "cancel_booking":
+      return handleCancelBooking(args, session);
+    case "reschedule_booking":
+      return handleRescheduleBooking(args, session);
+    case "lookup_booking":
+      return handleLookupBooking(args);
     default:
       return { ok: false, error: `Unknown tool: ${name}` };
   }

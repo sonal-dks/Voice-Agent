@@ -40,6 +40,16 @@ export function oauthGmailConfigured(): boolean {
   );
 }
 
+/** If the same refresh token was pasted twice on one .env line, Google returns invalid_grant. */
+function normalizeOAuthRefreshToken(raw: string): string {
+  const t = raw.trim();
+  if (t.length >= 40 && t.length % 2 === 0) {
+    const mid = t.length / 2;
+    if (t.slice(0, mid) === t.slice(mid)) return t.slice(0, mid);
+  }
+  return t;
+}
+
 /**
  * OAuth2 user creds for Gmail API (consumer Gmail / "installed app" or OAuth Playground).
  * Redirect URI must match the one used when the refresh token was issued.
@@ -47,7 +57,9 @@ export function oauthGmailConfigured(): boolean {
 export function getGmailOAuthClient(): OAuth2Client | null {
   const clientId = process.env.GMAIL_OAUTH_CLIENT_ID?.trim();
   const clientSecret = process.env.GMAIL_OAUTH_CLIENT_SECRET?.trim();
-  const refreshToken = process.env.GMAIL_OAUTH_REFRESH_TOKEN?.trim();
+  const refreshToken = normalizeOAuthRefreshToken(
+    process.env.GMAIL_OAUTH_REFRESH_TOKEN ?? ""
+  );
   if (!clientId || !clientSecret || !refreshToken) return null;
 
   const redirectUri =
@@ -106,6 +118,28 @@ function gmailConfigErrorMessage(): string {
     "GMAIL_OAUTH_REFRESH_TOKEN + GMAIL_OAUTH_USER_EMAIL for personal Gmail, or (2) GMAIL_DELEGATED_USER + " +
     "Workspace domain-wide delegation with GOOGLE_SERVICE_ACCOUNT_JSON."
   );
+}
+
+/** Human-readable suffix for logs and API `email_errors` (no secrets). */
+export function formatGmailAuthFailure(err: unknown): string {
+  const g = err as {
+    message?: string;
+    response?: { data?: { error?: string; error_description?: string } };
+  };
+  const body = g.response?.data;
+  const apiPart =
+    body?.error != null
+      ? `${body.error}${body.error_description ? ` (${body.error_description})` : ""}`
+      : "";
+  const s = err instanceof Error ? err.message : String(err);
+  const combined = [apiPart, s].filter(Boolean).join(" — ") || s;
+  if (/invalid_grant/i.test(combined)) {
+    return (
+      `${combined} — Regenerate the refresh token: from repo root run \`npm run gmail:oauth-token\`, then put the printed GMAIL_OAUTH_REFRESH_TOKEN in .env (single line). ` +
+      `Use the same GMAIL_OAUTH_CLIENT_ID / GMAIL_OAUTH_CLIENT_SECRET as in Google Cloud; GMAIL_OAUTH_REDIRECT_URI must match an authorized redirect URI exactly.`
+    );
+  }
+  return combined;
 }
 
 function requireSenderForDraft(): string {

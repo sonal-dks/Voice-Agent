@@ -8,6 +8,8 @@
     "start": "next start",
     "lint": "next lint",
     "test:phase1": "node scripts/phase1-smoke.mjs",
+    "test:phase2-sheets-a1": "npx tsx phase-2-scheduling-core/src/sheetsA1.test.ts",
+    "verify:sheets-tabs": "npx tsx scripts/verify-sheets-tabs.mts",
     "gmail:oauth-token": "npm run gmail:oauth-token --prefix phase-2-scheduling-core",
     "minify:service-account": "node scripts/minify-service-account-json.mjs"
   },

@@ -9,6 +9,7 @@ import {
   type SessionState,
 } from "./state";
 import { generateAssistantReply } from "./llm";
+import { tryConfirmOfferedSlotIfResolved } from "./toolHandlers";
 
 const PII_RESPONSE = `${DISCLAIMER_PHRASE}
 
@@ -27,6 +28,12 @@ export interface ProcessResult {
   bookingCode?: string | null;
   /** Phase 3 — UUID for `/booking/[code]?token=` (omit from LLM tool payloads) */
   secureLinkToken?: string | null;
+  /** Confirmed slot line for PII modal */
+  slotDisplay?: string | null;
+  /** Topic for PII modal */
+  bookingTopic?: string | null;
+  /** True when a new booking was just confirmed this turn (show PII button, not auto-open) */
+  bookingJustConfirmed?: boolean;
 }
 
 function toDto(s: SessionState): MessageDTO[] {
@@ -91,13 +98,18 @@ export async function processMessage(
       messages: toDto(session),
       bookingCode: session.lastBookingCode ?? undefined,
       secureLinkToken: session.lastSecureLinkToken ?? undefined,
+      slotDisplay: session.lastSlotDisplay ?? undefined,
+      bookingTopic: session.bookingTopic ?? undefined,
     };
   }
 
+  const codeBefore = session.lastBookingCode ?? null;
   const historyBefore = [...session.history];
   appendHistory(session, "user", trimmed);
 
-  let assistant = await generateAssistantReply(session, historyBefore, trimmed);
+  let assistant =
+    (await tryConfirmOfferedSlotIfResolved(session, trimmed)) ??
+    (await generateAssistantReply(session, historyBefore, trimmed));
 
   if (!session.disclaimerDelivered) {
     if (!assistant.includes(DISCLAIMER_PHRASE)) {
@@ -108,12 +120,18 @@ export async function processMessage(
 
   appendHistory(session, "model", assistant);
 
+  const bookingJustConfirmed =
+    session.lastBookingCode != null && session.lastBookingCode !== codeBefore;
+
   return {
     sessionId: session.sessionId,
     assistant,
     messages: toDto(session),
     bookingCode: session.lastBookingCode ?? undefined,
     secureLinkToken: session.lastSecureLinkToken ?? undefined,
+    slotDisplay: session.lastSlotDisplay ?? undefined,
+    bookingTopic: session.bookingTopic ?? undefined,
+    bookingJustConfirmed,
   };
 }
 

@@ -1,63 +1,46 @@
 /**
- * ElevenLabs TTS — server-side REST API for speech synthesis.
- * Returns MP3 audio as an ArrayBuffer.
+ * Deepgram Aura TTS — server-side REST API (`/v1/speak`).
+ * Returns MP3 audio as an ArrayBuffer (same `DEEPGRAM_API_KEY` as STT).
  *
- * Uses the "eleven_turbo_v2_5" model for ~200 ms first-byte latency.
- * Voice ID is read from ELEVENLABS_VOICE_ID (pick your voice in the
- * ElevenLabs console, copy the ID into the env var).
+ * @see https://developers.deepgram.com/docs/text-to-speech
  */
 
-export interface TtsOptions {
-  stability?: number;
-  similarityBoost?: number;
-  style?: number;
-}
+const SPEAK_URL = "https://api.deepgram.com/v1/speak";
 
-const DEFAULT_OPTS: Required<TtsOptions> = {
-  stability: 0.5,
-  similarityBoost: 0.8,
-  style: 0.0,
-};
-
-export async function synthesizeSpeech(
-  text: string,
-  opts?: TtsOptions
-): Promise<ArrayBuffer> {
-  const apiKey = process.env.ELEVENLABS_API_KEY?.trim();
-  const voiceId = process.env.ELEVENLABS_VOICE_ID?.trim();
-
-  if (!apiKey || !voiceId) {
+export async function synthesizeSpeech(text: string): Promise<ArrayBuffer> {
+  const apiKey = process.env.DEEPGRAM_API_KEY?.trim();
+  if (!apiKey) {
     throw new Error(
-      "ELEVENLABS_API_KEY and ELEVENLABS_VOICE_ID must be set for voice mode."
+      "DEEPGRAM_API_KEY is not set — voice playback requires the same key used for speech-to-text."
     );
   }
 
-  const o = { ...DEFAULT_OPTS, ...opts };
+  const model =
+    process.env.DEEPGRAM_TTS_MODEL?.trim() || "aura-2-thalia-en";
 
-  const res = await fetch(
-    `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`,
-    {
-      method: "POST",
-      headers: {
-        "xi-api-key": apiKey,
-        "Content-Type": "application/json",
-        Accept: "audio/mpeg",
-      },
-      body: JSON.stringify({
-        text,
-        model_id: "eleven_turbo_v2_5",
-        voice_settings: {
-          stability: o.stability,
-          similarity_boost: o.similarityBoost,
-          style: o.style,
-        },
-      }),
-    }
-  );
+  const url = new URL(SPEAK_URL);
+  url.searchParams.set("model", model);
+
+  const res = await fetch(url.toString(), {
+    method: "POST",
+    headers: {
+      Authorization: `Token ${apiKey}`,
+      "Content-Type": "application/json",
+      Accept: "audio/mpeg",
+    },
+    body: JSON.stringify({ text }),
+  });
 
   if (!res.ok) {
     const errBody = await res.text().catch(() => "");
-    throw new Error(`ElevenLabs TTS error ${res.status}: ${errBody}`);
+    let hint = errBody;
+    try {
+      const j = JSON.parse(errBody) as { err_msg?: string; message?: string };
+      hint = j.err_msg || j.message || errBody;
+    } catch {
+      /* use raw */
+    }
+    throw new Error(`Deepgram TTS error ${res.status}: ${hint.slice(0, 500)}`);
   }
 
   return res.arrayBuffer();

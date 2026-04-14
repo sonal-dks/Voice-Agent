@@ -3,6 +3,11 @@ import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio";
 
+import {
+  callAdvisorToolDirect,
+  useDirectAdvisorScheduling,
+} from "./schedulingDirectInvoke";
+
 /**
  * Resolve path to `advisor-mcp-server.ts` (stdio MCP entry).
  * Lives under `phase-2-scheduling-core/mcp/` (this package).
@@ -22,6 +27,8 @@ export function resolveAdvisorMcpServerEntry(): string | null {
 }
 
 export function schedulingMcpServerAvailable(): boolean {
+  /** Vercel/serverless: stdio MCP child often dies with "Connection closed"; use in-process tools. */
+  if (useDirectAdvisorScheduling()) return true;
   return resolveAdvisorMcpServerEntry() !== null;
 }
 
@@ -103,6 +110,9 @@ export async function callAdvisorMcpTool(
     | "lookup_pii_booking",
   args: Record<string, unknown>
 ): Promise<Record<string, unknown>> {
+  if (useDirectAdvisorScheduling()) {
+    return callAdvisorToolDirect(name, args);
+  }
   const client = await getConnectedClient();
   const result = await client.callTool({
     name,

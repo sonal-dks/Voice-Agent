@@ -14,7 +14,7 @@ export const runtime = "nodejs";
  *
  * Returns NDJSON stream:
  *   Line 1 → { type:"text", transcript, assistant, sessionId, … }   (sent immediately after engine)
- *   Line 2 → { type:"audio", data:"<base64 mp3>" }                  (sent after TTS)
+ *   Line 2 → { type:"audio", data:"<base64 mp3>" }                  (sent after Deepgram Aura TTS)
  *   On error → { type:"error", error:"…" }
  *
  * The streaming format lets the client show the text response ~1 s before

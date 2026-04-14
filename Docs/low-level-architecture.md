@@ -10,7 +10,7 @@
 1. **Phase 1 — Text ↔ text** — Web Agent UI + Agent API + Conversation Engine + **Groq** LLM (no STT/TTS, no Twilio).
 2. **Phase 2 — MCP** — **[FastMCP](https://gofastmcp.com/getting-started/welcome)** in **`phase-2-scheduling-core/`**. **Two real Calendar slots**, **Calendar hold**, **Bookings** + **Advisor Pre-Bookings**, advisor **Gmail draft**, **`submit_pii_booking`** — **all only via MCP tools**. Next.js = **MCP client** only; **`googleapis` only in the MCP server process.**
 3. **Phase 3 — Post-call PII** — Secondary UI + encrypted row + dual email via MCP; [`phase-3-post-call-pii/`](../phase-3-post-call-pii/).
-4. **Phase 4 — Browser STT + TTS** — Same UI + engine; Deepgram + ElevenLabs; future work in `lib/voice/`, `app/api/agent/stream/`. **No Twilio.**
+4. **Phase 4 — Browser STT + TTS** — Same UI + engine; **Deepgram** only (streaming STT + Aura REST TTS); `lib/voice/`, `app/api/agent/stream/`. **No Twilio.**
 
 **Twilio** — optional PSTN ingress at the end of this file.
 
@@ -41,7 +41,7 @@ These two documents are coupled. Any change to one must be reflected in the othe
 - **Document & build order:** 1 → 2 → 3 → 4 (see [architecture.md §14](./architecture.md#14-implementation-phases))
 - Test case IDs: `TC-{phase}-{seq}`, `TC-{phase}-F{seq}` (legacy IDs in repo may not match phase numbers until test matrix is realigned)
 - Eval IDs: `EVAL-{phase}-{seq}`
-- Component names: Twilio Voice Gateway (**optional**), Browser Voice Pipeline, Deepgram STT, ElevenLabs TTS, Conversation Engine, **Groq LLM** (OpenAI-compatible API), **FastMCP MCP server** (Python) + **MCP client in Next** (`@modelcontextprotocol/sdk`), **Google Calendar + Sheets** (inside MCP server), **Post-call PII UI**
+- Component names: Twilio Voice Gateway (**optional**), Browser Voice Pipeline, Deepgram STT, Deepgram Aura TTS, Conversation Engine, **Groq LLM** (OpenAI-compatible API), **FastMCP MCP server** (Python) + **MCP client in Next** (`@modelcontextprotocol/sdk`), **Google Calendar + Sheets** (inside MCP server), **Post-call PII UI**
 - Durable booking rows: **`Bookings` / `Advisor Pre-Bookings` / `PII_Submissions` in Google Sheets** (PostgreSQL sketches below are **legacy / alternate**)
 - MCP tool names (expose from FastMCP / match TS reference): `offer_slots`, `confirm_booking`, `submit_pii_booking`, plus drafts/sends as specified in [architecture.md](./architecture.md)
 
@@ -123,9 +123,8 @@ Every environment variable across all phases, in the order they are introduced.
 | `LLM_MAX_RETRIES` | 1 | No | Retries after HTTP 429 (default: 3) | `3` |
 | `LOG_LEVEL` | 1 | No | Logging level (default: INFO) | `INFO` |
 | `MCP_ADVISOR_SERVER_ENTRY` | 2 | No | Path or command for MCP server: **FastMCP** entry (e.g. `uv run python -m advisor_mcp`) or TS reference `advisor-mcp-server.ts` (`npx tsx …`) | *(see `.env.example`)* |
-| `DEEPGRAM_API_KEY` | 4 | Yes | Deepgram API key (browser streaming) | `dg-xxxxxxxx` |
-| `ELEVENLABS_API_KEY` | 4 | Yes | ElevenLabs API key | `el-xxxxxxxx` |
-| `ELEVENLABS_VOICE_ID` | 4 | Yes | ElevenLabs voice profile ID | `21m00Tcm4TlvDq8ikWAM` |
+| `DEEPGRAM_API_KEY` | 4 | Yes | Deepgram API key (**STT + TTS**; same key for streaming listen and Aura `/v1/speak`) | `dg-xxxxxxxx` |
+| `DEEPGRAM_TTS_MODEL` | 4 | No | Aura TTS model id (overrides implementation default) | `aura-2-thalia-en` |
 | `DATABASE_URL` | — | Optional | PostgreSQL — **only if** you adopt SQL booking store; **Sheets-first** milestone does not require it | `postgresql://...` |
 | `GOOGLE_SERVICE_ACCOUNT_JSON` | 2 | Yes* | Service account JSON (or base64) — loaded by **MCP server** for Calendar + Sheets | *(secret)* |
 | `GOOGLE_CALENDAR_ID` | 2 | Yes* | Shared advisor calendar ID | `primary` or `xxx@group.calendar.google.com` |
@@ -157,7 +156,7 @@ Every environment variable across all phases, in the order they are introduced.
 | `@modelcontextprotocol/sdk` | 2 | MCP client in Next; MCP server in scheduling package |
 | `tsx` | 2 dev | Spawn MCP server via `npx tsx` |
 | `zod` | 1+ | Validation |
-| `@deepgram/sdk` or REST | 4 | Streaming STT |
+| `@deepgram/sdk` or REST | 4 | Streaming STT; TTS via REST `POST /v1/speak` (see `lib/voice/tts.ts`) |
 | `tailwindcss` | 1+ | Styling |
 
 ### MCP server — Python (`phase-2-scheduling-core/fastmcp_server/`)
@@ -175,7 +174,7 @@ Every environment variable across all phases, in the order they are introduced.
 | `fastapi` | >=0.111.0 | 1 | Web framework — async HTTP + WebSocket |
 | `uvicorn[standard]` | >=0.30.0 | 1 | ASGI server |
 | `websockets` | >=12.0 | 1 | WebSocket protocol for Twilio Media Streams |
-| `httpx` | >=0.27.0 | 1 | Async HTTP client for ElevenLabs API |
+| `httpx` | >=0.27.0 | 1 | Async HTTP client for legacy / optional service sketches |
 | `twilio` | >=9.0.0 | 1 | Twilio SDK — TwiML generation, signature validation |
 | `deepgram-sdk` | >=3.4.0 | 1 | Deepgram SDK — streaming STT |
 | `pydantic-settings` | >=2.3.0 | 1 | Environment variable management |
@@ -199,7 +198,7 @@ Add `react-hook-form`, `@hookform/resolvers`, and `@sentry/nextjs` when implemen
 > **Tests:** [tests.md](../phase-1-text-agent/tests.md) (text path first)
 > **Evals:** [evals.md](../phase-1-text-agent/evals.md)
 
-**Goal:** Ship **`POST /api/agent/message`** with **text in → assistant text out** using the full Conversation Engine (intents, guardrails, disclaimer on first assistant turn). **No** Deepgram, **no** ElevenLabs, **no** Twilio. Deploy to **Vercel** (`vercel deploy` / Git integration).
+**Goal:** Ship **`POST /api/agent/message`** with **text in → assistant text out** using the full Conversation Engine (intents, guardrails, disclaimer on first assistant turn). **No** Deepgram voice stack, **no** Twilio. Deploy to **Vercel** (`vercel deploy` / Git integration).
 
 ### 1.1 Agent API — text messages
 
@@ -1054,7 +1053,7 @@ export async function POST(request: NextRequest, { params }: { params: { code: s
 > **Tests:** Phase 4 (future)
 > **Evals:** Phase 4 (future)
 
-**Goal:** Add **microphone → Deepgram → transcript → same Conversation Engine as Phase 1 → ElevenLabs → speaker**. Audio format is **browser-native** (e.g., linear16 / opus depending on Deepgram config) — **not** Twilio mulaw until the optional Twilio appendix.
+**Goal:** Add **microphone → Deepgram STT → transcript → same Conversation Engine as Phase 1 → Deepgram Aura TTS → speaker**. Audio format is **browser-native** (e.g., linear16 / opus depending on Deepgram config) — **not** Twilio mulaw until the optional Twilio appendix.
 
 ### 4.1 Deepgram STT (browser streaming)
 
@@ -1064,13 +1063,13 @@ export async function POST(request: NextRequest, { params }: { params: { code: s
 
 **Behavior:** Stream audio chunks from `MediaRecorder` or `AudioWorklet`; push partials/finals to the Agent API or process in-route; call `process_transcript` only on **final** segments (or your end-of-utterance policy).
 
-### 4.2 ElevenLabs TTS (playback in browser)
+### 4.2 Deepgram Aura TTS (playback in browser)
 
 **File:** `lib/voice/tts.ts`
 
-**Protocol:** REST streaming `POST /v1/text-to-speech/{voice_id}/stream` with an output format browsers can decode (e.g., **mp3** or **pcm** — not ulaw unless you standardize on it).
+**Protocol:** REST **`POST https://api.deepgram.com/v1/speak?model=<aura-model>`** with `Authorization: Token <DEEPGRAM_API_KEY>`, `Content-Type: application/json`, body `{ "text": "..." }`, `Accept: audio/mpeg`. Response is **MP3** for decode in the client.
 
-**Behavior:** Assistant text from the engine is synthesized and played via Web Audio or `<audio>`; ensure **disclaimer** plays within first voice response window (G5).
+**Behavior:** Assistant text from the engine is synthesized **server-side** in the stream route; the client plays returned audio via Web Audio or `<audio>`. Optional **`DEEPGRAM_TTS_MODEL`** selects the Aura model (code default when unset: `aura-2-thalia-en`). Ensure **disclaimer** plays within first voice response window (G5).
 
 ### 4.3 Agent route for audio (optional shapes)
 
@@ -1078,7 +1077,7 @@ export async function POST(request: NextRequest, { params }: { params: { code: s
 
 ### 4.4 Deploy & Rollback (Phase 4)
 
-**Deploy:** Add `DEEPGRAM_API_KEY`, `ELEVENLABS_API_KEY`, `ELEVENLABS_VOICE_ID` to Vercel. Keep **Node runtime** for streaming routes.
+**Deploy:** Add **`DEEPGRAM_API_KEY`** (required for STT + TTS) and optionally **`DEEPGRAM_TTS_MODEL`** to Vercel. Keep **Node runtime** for streaming routes.
 
 **Rollback:** Revert deployment; Phase 1 text route remains usable.
 
@@ -1103,7 +1102,7 @@ export async function POST(request: NextRequest, { params }: { params: { code: s
 
 **When:** After **Phase 4** browser voice is stable. **Do not** provision Twilio for Phases 1–4 core work.
 
-**Pattern:** Twilio **Media Streams** → same **Deepgram / ElevenLabs** clients as the browser, but with **mulaw 8 kHz** wire format (see earlier FastAPI sketches in git history or below).
+**Pattern:** Twilio **Media Streams** → same **Deepgram** STT + Aura TTS path as the browser (adapter for **mulaw 8 kHz** wire format — see earlier FastAPI sketches in git history or below).
 
 **Endpoints:** `POST /voice/incoming` (TwiML), `WebSocket /voice/stream` (bidirectional audio).
 
@@ -1130,7 +1129,7 @@ async def incoming_call(request: Request):
 | Question | Owner | Notes |
 |----------|-------|--------|
 | On PII submit, should the advisor receive an **automatic** send (in addition to the user confirmation email), or is the **Gmail draft** from Phase 2 MCP enough until manual send? | Product | Affects MCP `send_*` tool split |
-| ElevenLabs voice ID — brand fit? | Design | Before Phase 4 polish |
+| Deepgram Aura **TTS model** — brand fit? | Design | Before Phase 4 polish (`DEEPGRAM_TTS_MODEL`) |
 | Twilio number / region for IST (when enabled)? | Platform | Only when optional Twilio phase starts |
 | PII key management — KMS vs env-only for small scale? | Security | Phase 3 PII |
 
@@ -1150,3 +1149,4 @@ Aligned with [architecture.md § 15](./architecture.md#15-open-questions).
 | 2026-04-13 | Both | Slot policy: `any` full-day scan; confirm via ISO window; MCP free/busy before hold; Gmail draft failure excluded from `side_effects_completed`; `/agent` PII modal + API `slotDisplay`/`bookingTopic` | — |
 | 2026-04-13 | Both | New MCP tools: `cancel_booking`, `reschedule_booking`, `lookup_booking`; ChatGPT-themed UI; PII on-demand (no auto-open); chat stays open for multi-action; explicit end; Gmail draft on all actions; email send on PII submit or immediate if email on file for cancel/reschedule | — |
 | 2026-04-14 | Both | Bug fixes: duplicate booking guard (session-level), broader abort regex in `tryConfirmOfferedSlotIfResolved`, PII false-positive fix (removed over-broad patterns), tightened system prompt (no re-offer after confirm, PII-ready → point to button, never invent times, one-booking-per-session rule), time-preference centering for specific hours, Gmail error surfacing. UI: light theme, landing page → direct chat, "New conversation" button + end-chat flow. Removed unused `piiEmail` var in MCP server | — |
+| 2026-04-14 | Both | Phase 4 voice: **Deepgram only** — Aura REST TTS replaces ElevenLabs; single `DEEPGRAM_API_KEY`, optional `DEEPGRAM_TTS_MODEL`; docs + env registry aligned | — |

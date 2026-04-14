@@ -6,7 +6,7 @@
 
 Users seeking human advisor consultations currently navigate manual booking flows — web forms, email threads, or hold queues — that average 10+ minutes and frequently drop off before completion. This voice agent replaces that friction with a short session that collects the consultation topic and time preference, offers **two real slots from Google Calendar** (no mock calendar), confirms the booking with a unique code, and triggers downstream **Google Calendar events** (tentative hold), internal notes, and **advisor email drafts** via MCP. **Initial implementation does not include Twilio:** the **primary UI is a browser-based agent**—first **text chat** (validate the agent end-to-end), then **microphone + speaker** (STT/TTS) on the same page—so you can prove the agent before any phone integration. **Twilio (PSTN) is a later, optional ingress** to the same pipeline. **Post-call PII collection and confirmation email are in scope:** after the agent session, the user completes **PII in a secondary UI**; on submit, the system **emails the user** booking details, **auto-sends (finalizes) advisor notification** at the same time, and shows an **on-screen success notification**. **Before PII submit**, the agent session UI shows **only a copyable booking ID** (no manual “send” or “notify advisor” control on that screen). **Hosting:** Next.js **frontend and backend on Vercel**; **no custom domain** required (`*.vercel.app` is fine). **Implementation order (time):** **① Text agent** → **② MCP** (real booking on text) → **③ Post-call PII** (still text-first UI) → **④ Browser voice** (mic + STT + TTS on the **same** page and engine). **Do not** build voice before text, MCP, and PII are acceptable on the text path—voice is **last**, additive. See **§14** and [low-level-architecture.md](./low-level-architecture.md).
 
-**What “text first, then voice” means:** You **prove the full product loop in plain text** (`POST /api/agent/message`)—intents, guardrails, **Groq** LLM tool calls, **MCP** scheduling/confirm, and **post-call PII submit**—**without** Deepgram or ElevenLabs. Only then do you **add voice**: microphone → STT → **same** engine → TTS. Voice is an **additive layer**, not a parallel rewrite.
+**What “text first, then voice” means:** You **prove the full product loop in plain text** (`POST /api/agent/message`)—intents, guardrails, **Groq** LLM tool calls, **MCP** scheduling/confirm, and **post-call PII submit**—**without** Deepgram (no STT/TTS). Only then do you **add voice**: microphone → **Deepgram** STT → **same** engine → **Deepgram** TTS. Voice is an **additive layer**, not a parallel rewrite.
 
 ### How this document, low-level-architecture.md, and phase folders line up
 
@@ -56,7 +56,7 @@ graph TD
     WebUI -->|Primary: text chat| API[Agent API — Route Handlers]
     WebUI -->|Add later: mic + speaker| STT[Deepgram STT]
     STT -->|Transcript| API
-    API -->|Text response| TTS[ElevenLabs TTS]
+    API -->|Text response| TTS[Deepgram Aura TTS]
     TTS -->|Audio| WebUI
     API -->|Prompt + History| LLM[Groq LLM — tool calling]
     LLM -->|Tool Calls| CE[Conversation Engine]
@@ -68,7 +68,7 @@ graph TD
     VoicePipeline -.-> STT
 ```
 
-**Happy path (initial implementation — browser only, no Twilio):** The user opens the **Web Agent UI** on Vercel. **Implement in phase order:** **Phase 1** text-only → **Phase 2** MCP booking → **Phase 3** post-call PII → **Phase 4** mic + Deepgram + ElevenLabs on the same page. **UX flow** once built: user may type or speak into the **same** engine; on confirmation, **MCP** (FastMCP server) creates **Calendar** hold, **Sheets** rows, **Gmail draft** (**no** send from session UI). Session UI shows **copyable booking ID** only; **PII submit** triggers user + advisor email via MCP. **Twilio** is optional **later**.
+**Happy path (initial implementation — browser only, no Twilio):** The user opens the **Web Agent UI** on Vercel. **Implement in phase order:** **Phase 1** text-only → **Phase 2** MCP booking → **Phase 3** post-call PII → **Phase 4** mic + **Deepgram** (STT + Aura TTS) on the same page. **UX flow** once built: user may type or speak into the **same** engine; on confirmation, **MCP** (FastMCP server) creates **Calendar** hold, **Sheets** rows, **Gmail draft** (**no** send from session UI). Session UI shows **copyable booking ID** only; **PII submit** triggers user + advisor email via MCP. **Twilio** is optional **later**.
 
 **System boundary:** This architecture covers the **browser** agent (text then voice), **real** Google Calendar integration, **Google Sheets** as the durable store (bookings + PII rows), notes + Gmail **drafts** during the session and **post-PII-submit sends** (user + advisor). **Twilio telephony** is optional and deferred.
 
@@ -106,20 +106,20 @@ graph TD
 **Technology:** Same STT/TTS stack as browser path; may run as a long-lived process or separate service if Vercel limits apply.
 **Owner / repo:** `src/voice/pipeline.py` (optional)
 
-#### Deepgram STT
-**Responsibility:** Converts streaming PCM audio into real-time text transcripts with word-level timestamps.
-**Technology:** Deepgram Nova-2 streaming API. Chosen over Whisper for sub-300ms streaming latency (Whisper requires batch processing at 1–5s chunks). Chosen over Google STT for superior accuracy on Indian-accented English.
-**Interfaces:** WebSocket streaming API; emits interim and final transcript events.
-**Scaling strategy:** Managed SaaS — scales on Deepgram's infrastructure. Rate limit: 100 concurrent streams on Growth plan.
-**Owner / repo:** `src/voice/stt.py`
+#### Deepgram (voice — STT + TTS)
+**Responsibility:** **STT** — converts streaming audio into real-time text transcripts with word-level timestamps. **TTS** — converts assistant reply text into speech audio for browser playback.
 
-#### ElevenLabs TTS
-**Responsibility:** Converts agent response text into natural-sounding speech audio.
-**Technology:** ElevenLabs Turbo v2.5 streaming API. Chosen over Azure TTS for more natural prosody; chosen over Google TTS for lower first-byte latency (~200ms).
-**Configuration:** Voice profile is **not** hardcoded in source. Read **`ELEVENLABS_VOICE_ID`** from environment (Vercel env vars). You pick the voice once in the ElevenLabs UI, copy its ID into the variable, and change it per environment or rebrand without a code deploy.
-**Interfaces:** REST streaming API; accepts text, returns chunked audio (MP3/PCM).
-**Scaling strategy:** Managed SaaS. Rate limit: 100 concurrent requests on Scale plan.
-**Owner / repo:** `src/voice/tts.py`
+**STT — technology:** Deepgram Nova-2 streaming API. Chosen over Whisper for sub-300ms streaming latency (Whisper requires batch processing at 1–5s chunks). Chosen over Google STT for superior accuracy on Indian-accented English.
+
+**STT — interfaces:** WebSocket streaming API; emits interim and final transcript events.
+
+**TTS — technology:** Deepgram **Aura** REST API (`POST /v1/speak`), same **`DEEPGRAM_API_KEY`** as STT. Optional **`DEEPGRAM_TTS_MODEL`** selects the Aura voice (implementation default: `aura-2-thalia-en` when unset). Consolidates billing and secrets versus a second TTS vendor.
+
+**TTS — interfaces:** REST with JSON body `{ "text": "..." }`; response **MP3** (`audio/mpeg`) for decode in the browser.
+
+**Scaling strategy:** Managed SaaS — scales on Deepgram's infrastructure. STT: rate limits per plan (e.g. concurrent streams on Growth). TTS: per Deepgram TTS quotas.
+
+**Owner / repo:** `lib/voice/stt.ts`, `lib/voice/tts.ts`
 
 #### Conversation Engine
 **Responsibility:** The brain of the agent. Manages dialog state, routes **user text or transcripts** to the LLM, enforces compliance guardrails (disclaimer, no PII storage, no-advice), parses LLM tool calls, orchestrates MCP execution, and produces the final response text.
@@ -168,7 +168,7 @@ sequenceDiagram
     participant STT as Deepgram STT
     participant CE as Conversation Engine
     participant LLM as Groq LLM
-    participant TTS as ElevenLabs TTS
+    participant TTS as Deepgram Aura TTS
     participant MCP as MCP Tool Server
     participant GCal as Google Calendar
     participant Sh as Google Sheets
@@ -300,8 +300,29 @@ sequenceDiagram
 
 **Consequences:**
 - Sub-300ms streaming latency enables natural conversation pacing
-- Vendor dependency on Deepgram — mitigated by abstracting STT behind an interface (`src/voice/stt.py`)
+- Vendor dependency on Deepgram — mitigated by abstracting STT behind an interface (`lib/voice/stt.ts`; TTS in `lib/voice/tts.ts`)
 - Cost: ~$0.0043/min (Growth plan) — ~$0.02 per 5-minute call
+
+---
+
+#### Decision: Deepgram Aura for TTS (same vendor as STT)
+
+**Status:** Accepted
+
+**Context:** Browser voice needs responsive synthesis. Using two vendors (STT + separate TTS) duplicates secrets, dashboards, and compliance review.
+
+**Decision:** Use **Deepgram Aura** REST TTS (`/v1/speak`) with the **same** `DEEPGRAM_API_KEY` as streaming STT. Optional **`DEEPGRAM_TTS_MODEL`** overrides the default Aura model.
+
+**Alternatives Considered:**
+
+| Option | Why rejected |
+|--------|--------------|
+| ElevenLabs (or other standalone TTS) | Strong quality; rejected to keep Phase 4 on **one** voice API key and env surface. |
+| Cloud provider TTS only | Adds another speech product alongside Deepgram; Aura keeps STT+TTS unified. |
+
+**Consequences:**
+- Single primary secret for Phase 4 voice (`DEEPGRAM_API_KEY`; optional model env)
+- TTS implemented server-side in the agent stream path; client plays returned MP3
 
 ---
 
@@ -507,7 +528,7 @@ app/
 |------|----------------|------------------------|
 | **`/agent` (or `/`)** | Main shell: disclaimer placement, chat thread, optional voice controls | **Client Component** (`'use client'`) — mic permission, `MediaRecorder`, streaming state |
 | **`ChatThread`** | Message list, scroll, loading/error states per turn | Client; calls `POST /api/agent/message` for text |
-| **`MicButton` + playback** | STT stream lifecycle, ElevenLabs playback via Web Audio | Client only; no raw audio persisted |
+| **`MicButton` + playback** | STT stream lifecycle; playback of **Deepgram Aura** MP3 from the stream route (Web Audio / `<audio>`) | Client only; no raw audio persisted |
 | **`BookingIdPanel`** | Copy-to-clipboard, short session summary, CTA link to `/booking/[code]` | Client; reads booking code from last assistant payload or client state |
 | **`/booking/[code]`** | Post-call PII form (name, email, phone, …) | Client form + **Server** wrapper optional for SEO/security; submit → `POST /api/booking/[code]/submit` |
 | **Layouts** | Shared chrome, fonts, theme | `app/layout.tsx` (Server); globals + Tailwind |
@@ -558,7 +579,7 @@ app/
 |-----------|-----------|-------------|
 | STT (speech end → transcript) | 300ms | Deepgram dashboard |
 | LLM (prompt → response) | 800ms | Groq API latency / traces |
-| TTS (text → first audio byte) | 200ms | ElevenLabs API latency |
+| TTS (text → first audio byte) | 200ms | Deepgram TTS API / traces |
 | Network overhead (Twilio ↔ service) | 100ms | Internal instrumentation |
 | **Total voice round-trip** | **< 1,500ms** | End-to-end measurement |
 
@@ -588,7 +609,7 @@ app/
 - Google APIs called server-side only.
 
 **Secrets management:**
-- **Vercel Environment Variables:** **`GROQ_API_KEY`**, **`GROQ_MODEL`**, `DEEPGRAM_API_KEY`, `ELEVENLABS_API_KEY`, **`ELEVENLABS_VOICE_ID`**, **`GOOGLE_SHEETS_SPREADSHEET_ID`**, `GOOGLE_SERVICE_ACCOUNT_JSON`, `GOOGLE_CALENDAR_ID`, **Gmail (pick one path):** **`GMAIL_OAUTH_CLIENT_ID`**, **`GMAIL_OAUTH_CLIENT_SECRET`**, **`GMAIL_OAUTH_REFRESH_TOKEN`**, **`GMAIL_OAUTH_REDIRECT_URI`**, **`GMAIL_OAUTH_USER_EMAIL`** (personal Gmail), **or** **`GMAIL_DELEGATED_USER`** (Workspace delegation only), plus **`ADVISOR_INBOX_EMAIL`**, **`ADVISOR_PUBLIC_DETAILS`**, **`PII_ENCRYPTION_KEY`** (optional if encrypting PII columns), optional `TWILIO_*` later.
+- **Vercel Environment Variables:** **`GROQ_API_KEY`**, **`GROQ_MODEL`**, **`DEEPGRAM_API_KEY`** (Phase 4 STT + TTS), optional **`DEEPGRAM_TTS_MODEL`**, **`GOOGLE_SHEETS_SPREADSHEET_ID`**, `GOOGLE_SERVICE_ACCOUNT_JSON`, `GOOGLE_CALENDAR_ID`, **Gmail (pick one path):** **`GMAIL_OAUTH_CLIENT_ID`**, **`GMAIL_OAUTH_CLIENT_SECRET`**, **`GMAIL_OAUTH_REFRESH_TOKEN`**, **`GMAIL_OAUTH_REDIRECT_URI`**, **`GMAIL_OAUTH_USER_EMAIL`** (personal Gmail), **or** **`GMAIL_DELEGATED_USER`** (Workspace delegation only), plus **`ADVISOR_INBOX_EMAIL`**, **`ADVISOR_PUBLIC_DETAILS`**, **`PII_ENCRYPTION_KEY`** (optional if encrypting PII columns), optional `TWILIO_*` later.
 
 **Compliance requirements:**
 - **Disclaimer:** Shown at session start (text or first voice turn).
@@ -630,7 +651,7 @@ app/
 | Build | `next build` (root of Next.js app) |
 | Runtime | **Node.js** for API routes that call **Groq**, Google Sheets, Calendar, Gmail |
 | Environments | **Preview** (per PR branch) → **Production** (main) |
-| Secrets | **Vercel → Project → Settings → Environment Variables** — attach to Preview and/or Production (`GROQ_*`, `DEEPGRAM_*`, `ELEVENLABS_*`, `GOOGLE_*`, `GOOGLE_SHEETS_*`, `GMAIL_OAUTH_*` or `GMAIL_DELEGATED_USER`, `PII_ENCRYPTION_KEY`, `ADVISOR_*`); never commit |
+| Secrets | **Vercel → Project → Settings → Environment Variables** — attach to Preview and/or Production (`GROQ_*`, `DEEPGRAM_*`, `GOOGLE_*`, `GOOGLE_SHEETS_*`, `GMAIL_OAUTH_*` or `GMAIL_DELEGATED_USER`, `PII_ENCRYPTION_KEY`, `ADVISOR_*`); never commit |
 | Domain | Default **`https://<project>.vercel.app`** — custom domain optional |
 
 **CI/CD:**
@@ -718,7 +739,7 @@ Use this for **first deploy** and **ongoing releases**. UI and backend ship toge
 | Errors | Sentry (optional) | Client + server |
 | Frontend | Vercel Analytics | Web Vitals |
 | Google APIs | Google Cloud metrics / logs | Calendar API errors, quota |
-| Voice (Phase 4) | Deepgram / ElevenLabs dashboards | STT/TTS latency |
+| Voice (Phase 4) | Deepgram dashboard | STT/TTS latency |
 
 **Key alerts:**
 
@@ -758,7 +779,7 @@ Work is organized in **three parallel tracks**. **Backend phases 1–4** below f
 
 ### Text-first, then voice (explicit product meaning)
 
-This is **not** two separate apps. **Phases 1–3** use **text only** until booking, MCP tools, and PII submit are validated—**no** Deepgram or ElevenLabs. **Phase 4** adds **mic + STT + TTS** on the **same** page and engine. Phase 4 (future) will add voice support in `lib/voice/` and `app/api/agent/stream/`.
+This is **not** two separate apps. **Phases 1–3** use **text only** until booking, MCP tools, and PII submit are validated—**no** Deepgram voice stack. **Phase 4** adds **mic + STT + TTS** (all **Deepgram**) on the **same** page and engine. Voice support lives in `lib/voice/` and `app/api/agent/stream/`.
 
 ### Phase map: frontend vs backend (what to build where)
 
@@ -769,7 +790,7 @@ All of this ships in **one Next.js app** on **one Vercel project** unless you ex
 | **1 — Text agent** | `app/agent` page: `ChatThread`, textarea, send button, disclaimer, loading states; session id in client | `app/api/agent/message`, Conversation Engine + **Groq**, prompts, guardrails; no audio routes yet | Deploy Preview URL; test full flow in browser without mic |
 | **2 — MCP** | Slot chips/copy, **BookingIdPanel**, copyable booking code + CTA | Next **MCP client** (`lib/mcp/`) → **FastMCP** (or TS reference): Calendar, **Bookings** + **Advisor Pre-Bookings**, **Gmail draft** | [`phase-2-scheduling-core/`](../phase-2-scheduling-core/); `MCP_*` / `GOOGLE_*` env |
 | **3 — Post-call PII** | `app/booking/[code]`, form validation, success toast | `POST .../submit` → **MCP** only for PII row, Calendar patch, dual email | [`phase-3-post-call-pii/`](../phase-3-post-call-pii/) |
-| **4 — Browser voice** | `MicButton`, capture/stream audio, play TTS, permission UX | `app/api/agent/stream` (or chunked POST), Deepgram + ElevenLabs; same engine as text | **Node** runtime; future — `lib/voice/`, `app/api/agent/stream/` |
+| **4 — Browser voice** | `MicButton`, capture/stream audio, play TTS, permission UX | `app/api/agent/stream` (or chunked POST), **Deepgram** STT + Aura TTS; same engine as text | **Node** runtime; `lib/voice/`, `app/api/agent/stream/` |
 
 **Deployment:** Every row’s frontend + backend go out together via **`vercel deploy`** / Git integration — see **§12** and **§9g**.
 
@@ -802,7 +823,7 @@ All of this ships in **one Next.js app** on **one Vercel project** unless you ex
 
 ### Backend — Phase 4 — Browser Voice Pipeline (STT + TTS, no Twilio)
 
-**Goal:** Same page gains **microphone + speaker**; **Deepgram** streams transcripts into the **same** Conversation Engine path; **ElevenLabs** speaks replies. **Twilio is not used** — PSTN is deferred. Prove voice round-trip latency and disclaimer within first voice playback (G5).
+**Goal:** Same page gains **microphone + speaker**; **Deepgram** streams transcripts into the **same** Conversation Engine path; **Deepgram Aura** synthesizes replies for playback. **Twilio is not used** — PSTN is deferred. Prove voice round-trip latency and disclaimer within first voice playback (G5).
 **Depends on:** Phase 1 (engine); **recommended** after **Phases 2–3** are green on text.
 **Exit criteria:** TC-1-01–style voice tests on **browser** audio; voice round-trip \< 2s p95 where measurable; STT/TTS integrated with existing engine.
 **Estimated scope:** M
@@ -845,7 +866,7 @@ Status legend: 🔲 Not started · 🔄 In progress · ✅ Complete · ⛔ Block
 |----------|-------|-------------------|
 | Twilio number / region for IST users *(only if optional telephony is enabled)* | Platform | Before Twilio integration |
 
-**Resolved:** ~~Post-call PII optional?~~ → **In scope (required).** ~~Advisor send on PII submit?~~ → **Auto-send advisor** at submit with user email. ~~Manual send on session UI?~~ → **No** — booking ID + copy only until post-call submit (unless you change later). ~~PII encryption KMS vs env?~~ → **Env-only AES** (`PII_ENCRYPTION_KEY`). ~~ElevenLabs voice ID hardcoded?~~ → **`ELEVENLABS_VOICE_ID`** env var (pick voice in ElevenLabs console). ~~Which Gmail inbox for advisor drafts?~~ → **`ADVISOR_INBOX_EMAIL`** env var — drafts are created/sent to that address; no separate “ops process” field in code (your team still decides who logs into that inbox).
+**Resolved:** ~~Post-call PII optional?~~ → **In scope (required).** ~~Advisor send on PII submit?~~ → **Auto-send advisor** at submit with user email. ~~Manual send on session UI?~~ → **No** — booking ID + copy only until post-call submit (unless you change later). ~~PII encryption KMS vs env?~~ → **Env-only AES** (`PII_ENCRYPTION_KEY`). ~~TTS voice configuration?~~ → **`DEEPGRAM_TTS_MODEL`** optional env var (default Aura model in code); **`DEEPGRAM_API_KEY`** covers STT + TTS. ~~Which Gmail inbox for advisor drafts?~~ → **`ADVISOR_INBOX_EMAIL`** env var — drafts are created/sent to that address; no separate “ops process” field in code (your team still decides who logs into that inbox).
 
 **Parked:** ~~Mock calendar~~ → **Real Google Calendar only**. ~~Custom domain~~ → **Not required**; **Vercel `*.vercel.app`** is in scope.
 
@@ -854,7 +875,7 @@ Status legend: 🔲 Not started · 🔄 In progress · ✅ Complete · ⛔ Block
 - **Low-Level Architecture:** [low-level-architecture.md](./low-level-architecture.md) — implementation spec, code, schemas, env vars, deploy/rollback
 - [Twilio Media Streams documentation](https://www.twilio.com/docs/voice/media-streams)
 - [Deepgram Nova-2 streaming API](https://developers.deepgram.com/docs/getting-started-with-live-streaming-audio)
-- [ElevenLabs streaming TTS API](https://elevenlabs.io/docs/api-reference/text-to-speech-stream)
+- [Deepgram Text-to-Speech (Aura)](https://developers.deepgram.com/docs/text-to-speech)
 - [Groq — Tool use / local tool calling](https://console.groq.com/docs/tool-use/local-tool-calling) (OpenAI-compatible tools; see `lib/agent/llmTools.ts`)
 - [FastMCP — Welcome](https://gofastmcp.com/getting-started/welcome) (Python MCP server framework)
 - [Model Context Protocol specification](https://modelcontextprotocol.io/)

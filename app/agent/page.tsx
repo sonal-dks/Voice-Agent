@@ -45,6 +45,7 @@ export default function AgentPage() {
   /* ── Mode: chat vs voice ────────────────────────────────────────── */
   const [mode, setMode] = useState<"chat" | "voice">("voice");
   const hasPlayedVoiceGreetingRef = useRef(false);
+  const pendingVoiceGreetingRef = useRef(false);
 
   /* ── Auto-scroll ────────────────────────────────────────────────── */
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -55,24 +56,52 @@ export default function AgentPage() {
     });
   }, [lines, loading]);
 
-  /* ── Voice greeting on first switch to voice mode ─────────────── */
-  useEffect(() => {
-    if (mode !== "voice" || chatEnded) return;
-    if (hasPlayedVoiceGreetingRef.current) return;
-    if (lines.length !== 1 || lines[0]?.role !== "assistant") return;
-    if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
+  const trySpeakVoiceGreeting = useCallback(() => {
+    if (mode !== "voice" || chatEnded) return false;
+    if (hasPlayedVoiceGreetingRef.current || pendingVoiceGreetingRef.current) return true;
+    if (lines.length !== 1 || lines[0]?.role !== "assistant") return false;
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) return false;
 
+    pendingVoiceGreetingRef.current = true;
     const utter = new SpeechSynthesisUtterance(lines[0].content);
     utter.rate = 1;
     utter.pitch = 1;
+    utter.onstart = () => {
+      hasPlayedVoiceGreetingRef.current = true;
+      pendingVoiceGreetingRef.current = false;
+    };
+    utter.onend = () => {
+      pendingVoiceGreetingRef.current = false;
+    };
+    utter.onerror = () => {
+      pendingVoiceGreetingRef.current = false;
+    };
     window.speechSynthesis.cancel();
     window.speechSynthesis.speak(utter);
-    hasPlayedVoiceGreetingRef.current = true;
+    return true;
+  }, [mode, chatEnded, lines]);
+
+  /* ── Voice greeting on first voice session (with gesture fallback) ── */
+  useEffect(() => {
+    if (mode !== "voice" || chatEnded || hasPlayedVoiceGreetingRef.current) return;
+
+    // Try immediately; if blocked by autoplay policy, retry on first user gesture.
+    trySpeakVoiceGreeting();
+
+    const onFirstGesture = () => {
+      if (hasPlayedVoiceGreetingRef.current) return;
+      trySpeakVoiceGreeting();
+    };
+
+    window.addEventListener("pointerdown", onFirstGesture, { once: true });
+    window.addEventListener("keydown", onFirstGesture, { once: true });
 
     return () => {
+      window.removeEventListener("pointerdown", onFirstGesture);
+      window.removeEventListener("keydown", onFirstGesture);
       window.speechSynthesis.cancel();
     };
-  }, [mode, lines, chatEnded]);
+  }, [mode, chatEnded, trySpeakVoiceGreeting]);
 
   /* ── Apply server response (shared by text and voice paths) ──── */
   const applyResponse = useCallback(
@@ -141,6 +170,7 @@ export default function AgentPage() {
     setPiiSuccessMsg(null);
     setChatEnded(false);
     hasPlayedVoiceGreetingRef.current = false;
+    pendingVoiceGreetingRef.current = false;
   }, [voice]);
 
   /* ── Send text message (chat mode) ──────────────────────────────── */

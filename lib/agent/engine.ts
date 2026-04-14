@@ -69,6 +69,20 @@ function stripRepeatedGreetingIntro(text: string): string {
     .trim();
 }
 
+function isInvestmentAdviceRequest(text: string): boolean {
+  const t = text.toLowerCase();
+  return (
+    t.includes("investment advice") ||
+    t.includes("which fund") ||
+    t.includes("which stock") ||
+    t.includes("recommend") ||
+    t.includes("should i invest") ||
+    t.includes("where should i invest") ||
+    t.includes("best fund") ||
+    t.includes("market timing")
+  );
+}
+
 /**
  * Client holds the visible transcript; server memory is in-process only (lost on
  * serverless cold starts). Rebuild `session.history` from the client so the LLM
@@ -81,9 +95,12 @@ function applyClientTranscript(
 ): void {
   if (clientMessages.length < 1) return;
   const last = clientMessages[clientMessages.length - 1];
-  if (last.role !== "user" || last.content !== currentUserText) return;
+  const transcript =
+    last.role === "user" && last.content.trim() === currentUserText.trim()
+      ? clientMessages.slice(0, -1)
+      : clientMessages;
 
-  session.history = clientMessages.slice(0, -1).map((m) => ({
+  session.history = transcript.map((m) => ({
     role: m.role === "assistant" ? "model" : "user",
     text: m.content,
   }));
@@ -147,6 +164,9 @@ export async function processMessage(
   } else {
     assistant = stripRepeatedDisclaimer(assistant);
     assistant = stripRepeatedGreetingIntro(assistant);
+    if (isInvestmentAdviceRequest(trimmed) && !assistant.includes(DISCLAIMER_PHRASE)) {
+      assistant = `${DISCLAIMER_PHRASE}\n\n${assistant}`;
+    }
     if (!assistant) {
       assistant = "How can I help you with booking, rescheduling, cancellation, or availability?";
     }

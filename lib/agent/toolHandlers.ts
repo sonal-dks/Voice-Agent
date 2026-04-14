@@ -241,11 +241,13 @@ export function formatOfferSlotsReplyForUser(raw: Record<string, unknown>): stri
   }
   const slots = raw.slots;
   if (Array.isArray(slots) && slots.length > 0) {
-    const lines = slots.map((s: unknown, i: number) => {
-      const o = s as Record<string, unknown>;
-      return `${i + 1}. ${String(o.display ?? o.key ?? "")}`;
-    });
-    return `Here are two free slots that day (IST):\n${lines.join("\n")}\n\nIf one of these works, say which. If you wanted a different time on that day, say the time — we can book it if the calendar is free (not limited to only these two).`;
+    const first = String((slots[0] as Record<string, unknown>).display ?? "");
+    const second = String((slots[1] as Record<string, unknown>).display ?? "");
+    if (first && second) {
+      return `I found two available times that day: ${first} and ${second}. If one works, tell me which one you prefer; if you want a different time on that day, tell me and I can try that too.`;
+    }
+    const only = first || second || "the available slot";
+    return `I found an available time: ${only}. If this works, I can confirm it now, or I can check another time on the same day.`;
   }
   return String(raw.message ?? "No slots returned.");
 }
@@ -447,7 +449,7 @@ export async function handleOfferSlots(
           ...raw,
           slot_choices_for_confirm: slotChoices,
           message:
-            "List BOTH slot lines (IST). If they choose one of these, call confirm_booking with selected_slot_key/display from slot_choices_for_confirm. If they ask for a different time on the same day that was NOT one of the two (e.g. a specific hour), call confirm_booking with start_iso and end_iso for that window (duration = typical slot length, e.g. 30 min) — do not force them to pick only from the two. If they say 'second' or '5:30 PM' matching an offer, use selected_slot_key/display as before.",
+            "Respond conversationally (no numbered bullets). Mention both slot times naturally in one sentence. If they pick one, call confirm_booking with selected_slot_key/display from slot_choices_for_confirm. If they ask for a different time on the same day, call confirm_booking with start_iso and end_iso for that window (duration typically 30 min). If they say 'second' or mention a matching time, map it to the offered slot and confirm.",
         };
       }
     }

@@ -59,6 +59,13 @@ function resolveDayStart(day: string, tz: string): DateTime {
   const now = DateTime.now().setZone(tz).startOf("day");
   if (d === "today") return now;
   if (d === "tomorrow") return now.plus({ days: 1 });
+  if (
+    d === "day after tomorrow" ||
+    d === "the day after tomorrow" ||
+    d === "after tomorrow"
+  ) {
+    return now.plus({ days: 2 });
+  }
   const parsed = DateTime.fromISO(day, { zone: tz });
   if (parsed.isValid) return parsed.startOf("day");
   // try common patterns

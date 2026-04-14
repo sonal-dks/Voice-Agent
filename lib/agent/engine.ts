@@ -46,6 +46,12 @@ function toDto(s: SessionState): MessageDTO[] {
   }));
 }
 
+function stripRepeatedDisclaimer(text: string): string {
+  const escaped = DISCLAIMER_PHRASE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const re = new RegExp(`^\\s*${escaped}[\\s:—-]*`, "i");
+  return text.replace(re, "").trim();
+}
+
 /**
  * Client holds the visible transcript; server memory is in-process only (lost on
  * serverless cold starts). Rebuild `session.history` from the client so the LLM
@@ -120,6 +126,11 @@ export async function processMessage(
       assistant = `${DISCLAIMER_PHRASE}\n\n${assistant}`;
     }
     session.disclaimerDelivered = true;
+  } else {
+    assistant = stripRepeatedDisclaimer(assistant);
+    if (!assistant) {
+      assistant = "How can I help you with booking, rescheduling, cancellation, or availability?";
+    }
   }
 
   appendHistory(session, "model", assistant);

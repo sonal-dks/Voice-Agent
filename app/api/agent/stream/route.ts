@@ -4,6 +4,30 @@ import { synthesizeSpeech } from "@/lib/voice/tts";
 
 export const runtime = "nodejs";
 
+function sanitizeVoiceTranscript(raw: string): string {
+  let t = raw.trim();
+  if (!t) return t;
+
+  // If microphone catches TTS greeting audio, strip that echoed prefix.
+  t = t.replace(
+    /^this service is informational and does not constitute investment advice\.?\s*/i,
+    ""
+  );
+  t = t.replace(
+    /^hello[—,\s-]*i['’]m the white money advisor scheduling assistant[\s\S]*?what would you like to do\??\s*/i,
+    ""
+  );
+
+  // De-duplicate accidental repeated sentence fragments from STT.
+  const parts = t.split(/(?<=[.?!])\s+/).map((x) => x.trim()).filter(Boolean);
+  const deduped: string[] = [];
+  for (const p of parts) {
+    const norm = p.toLowerCase();
+    if (!deduped.some((d) => d.toLowerCase() === norm)) deduped.push(p);
+  }
+  return deduped.join(" ").trim();
+}
+
 /**
  * POST /api/agent/stream
  *
@@ -53,7 +77,9 @@ export async function POST(req: Request) {
             audio.type || "audio/webm"
           );
 
-          if (!stt.transcript) {
+          const transcript = sanitizeVoiceTranscript(stt.transcript);
+
+          if (!transcript) {
             controller.enqueue(
               ndjsonLine({
                 type: "error",
@@ -68,7 +94,7 @@ export async function POST(req: Request) {
           // ── 2. Conversation Engine (same as text chat) ──────
           const result = await processTranscript(
             sessionId,
-            stt.transcript,
+            transcript,
             clientMessages
           );
 
@@ -76,7 +102,7 @@ export async function POST(req: Request) {
           controller.enqueue(
             ndjsonLine({
               type: "text",
-              transcript: stt.transcript,
+              transcript,
               assistant: result.assistant,
               sessionId: result.sessionId,
               bookingCode: result.bookingCode ?? null,

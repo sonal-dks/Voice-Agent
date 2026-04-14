@@ -37,6 +37,7 @@ export default function AgentPage() {
 
   /* ── Mode: chat vs voice ────────────────────────────────────────── */
   const [mode, setMode] = useState<"chat" | "voice">("voice");
+  const [isGreetingSpeaking, setIsGreetingSpeaking] = useState(false);
   const hasPlayedVoiceGreetingRef = useRef(false);
   const pendingVoiceGreetingRef = useRef(false);
 
@@ -62,12 +63,15 @@ export default function AgentPage() {
     utter.onstart = () => {
       hasPlayedVoiceGreetingRef.current = true;
       pendingVoiceGreetingRef.current = false;
+      setIsGreetingSpeaking(true);
     };
     utter.onend = () => {
       pendingVoiceGreetingRef.current = false;
+      setIsGreetingSpeaking(false);
     };
     utter.onerror = () => {
       pendingVoiceGreetingRef.current = false;
+      setIsGreetingSpeaking(false);
     };
     window.speechSynthesis.cancel();
     window.speechSynthesis.speak(utter);
@@ -93,6 +97,7 @@ export default function AgentPage() {
       window.removeEventListener("pointerdown", onFirstGesture);
       window.removeEventListener("keydown", onFirstGesture);
       window.speechSynthesis.cancel();
+      setIsGreetingSpeaking(false);
     };
   }, [mode, chatEnded, trySpeakVoiceGreeting]);
 
@@ -118,7 +123,7 @@ export default function AgentPage() {
   const voice = useVoice({
     sessionId,
     messages: lines,
-    disabled: piiModalOpen || chatEnded,
+    disabled: piiModalOpen || chatEnded || isGreetingSpeaking,
     onResponse: useCallback(
       (data: VoiceResponse) => {
         if (END_PHRASES.test(data.transcript.trim())) {
@@ -162,6 +167,7 @@ export default function AgentPage() {
     setPiiModalOpen(false);
     setPiiSuccessMsg(null);
     setChatEnded(false);
+    setIsGreetingSpeaking(false);
     hasPlayedVoiceGreetingRef.current = false;
     pendingVoiceGreetingRef.current = false;
   }, [voice]);
@@ -241,7 +247,7 @@ export default function AgentPage() {
   }, [voice]);
 
   const frozen = piiModalOpen;
-  const voiceBusy = voice.isProcessing || voice.isPlaying;
+  const voiceBusy = voice.isProcessing || voice.isPlaying || isGreetingSpeaking;
 
   return (
     <div

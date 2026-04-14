@@ -210,6 +210,12 @@ export function useVoice({
   const startRecording = useCallback(async () => {
     if (status !== "idle" || disabled) return;
     setError(null);
+    if (typeof window !== "undefined" && "speechSynthesis" in window && window.speechSynthesis.speaking) {
+      const msg = "Please wait a second for the greeting audio to finish, then tap mic.";
+      setError(msg);
+      onErrorRef.current(msg);
+      return;
+    }
 
     try {
       const mediaStream = await navigator.mediaDevices.getUserMedia({

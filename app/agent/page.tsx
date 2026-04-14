@@ -11,14 +11,7 @@ type ChatLine = { role: "user" | "assistant"; content: string; via?: "voice" };
 
 const OPENING = `${DISCLAIMER_PHRASE}
 
-Hello — I'm the White Money Advisor scheduling assistant. Here's what I can help with:
-
-• Book a new consultation
-• Reschedule or cancel a booking
-• Check availability for a day you have in mind
-• Get ready — what to bring to your appointment
-
-What would you like to do?`;
+Hello — I'm the White Money Advisor scheduling assistant. I can help with booking, rescheduling, cancellation, availability, or preparation tips for your advisor call. What would you like to do?`;
 
 const END_PHRASES =
   /^(bye|goodbye|end\s*chat|exit|done|no\s*thanks|nothing\s*else|that'?s\s*all|i'?m\s*done|close\s*chat|quit)$/i;
@@ -198,6 +191,7 @@ export default function AgentPage() {
     setInput("");
     const userLine: ChatLine = { role: "user", content: text };
     const payload = [...lines, userLine];
+    const contextMessages = payload.slice(-20);
     setLines((p) => [...p, userLine]);
 
     try {
@@ -207,7 +201,7 @@ export default function AgentPage() {
         body: JSON.stringify({
           sessionId: sessionId ?? undefined,
           text,
-          messages: payload,
+          messages: contextMessages,
         }),
       });
       const data = (await res.json()) as {
@@ -802,9 +796,34 @@ export default function AgentPage() {
               padding: "28px 24px",
               border: "1px solid var(--border)",
               boxShadow: "var(--shadow)",
+              position: "relative",
             }}
             onClick={(e) => e.stopPropagation()}
           >
+            <button
+              type="button"
+              aria-label="Close dialog"
+              onClick={() => {
+                setPiiModalOpen(false);
+                setPiiSuccessMsg(null);
+              }}
+              style={{
+                position: "absolute",
+                top: 10,
+                right: 10,
+                width: 30,
+                height: 30,
+                borderRadius: "50%",
+                border: "1px solid var(--border)",
+                background: "var(--bg)",
+                color: "var(--text)",
+                fontSize: "1.1rem",
+                lineHeight: 1,
+                cursor: "pointer",
+              }}
+            >
+              ×
+            </button>
             {piiSuccessMsg ? (
               <div>
                 <h2

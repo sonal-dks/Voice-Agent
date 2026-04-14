@@ -136,7 +136,8 @@ export function useVoice({
     const form = new FormData();
     form.append("audio", blob);
     if (sessionIdRef.current) form.append("sessionId", sessionIdRef.current);
-    form.append("messages", JSON.stringify(messagesRef.current));
+    // Keep context bounded so the model does not echo the full transcript.
+    form.append("messages", JSON.stringify(messagesRef.current.slice(-20)));
 
     try {
       const res = await fetch("/api/agent/stream", {

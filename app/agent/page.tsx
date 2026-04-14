@@ -43,7 +43,8 @@ export default function AgentPage() {
   const [chatEnded, setChatEnded] = useState(false);
 
   /* ── Mode: chat vs voice ────────────────────────────────────────── */
-  const [mode, setMode] = useState<"chat" | "voice">("chat");
+  const [mode, setMode] = useState<"chat" | "voice">("voice");
+  const hasPlayedVoiceGreetingRef = useRef(false);
 
   /* ── Auto-scroll ────────────────────────────────────────────────── */
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -53,6 +54,25 @@ export default function AgentPage() {
       behavior: "smooth",
     });
   }, [lines, loading]);
+
+  /* ── Voice greeting on first switch to voice mode ─────────────── */
+  useEffect(() => {
+    if (mode !== "voice" || chatEnded) return;
+    if (hasPlayedVoiceGreetingRef.current) return;
+    if (lines.length !== 1 || lines[0]?.role !== "assistant") return;
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
+
+    const utter = new SpeechSynthesisUtterance(lines[0].content);
+    utter.rate = 1;
+    utter.pitch = 1;
+    window.speechSynthesis.cancel();
+    window.speechSynthesis.speak(utter);
+    hasPlayedVoiceGreetingRef.current = true;
+
+    return () => {
+      window.speechSynthesis.cancel();
+    };
+  }, [mode, lines, chatEnded]);
 
   /* ── Apply server response (shared by text and voice paths) ──── */
   const applyResponse = useCallback(
@@ -120,6 +140,7 @@ export default function AgentPage() {
     setPiiModalOpen(false);
     setPiiSuccessMsg(null);
     setChatEnded(false);
+    hasPlayedVoiceGreetingRef.current = false;
   }, [voice]);
 
   /* ── Send text message (chat mode) ──────────────────────────────── */

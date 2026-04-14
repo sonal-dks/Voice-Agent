@@ -11,12 +11,12 @@ type ChatLine = { role: "user" | "assistant"; content: string; via?: "voice" };
 
 const OPENING = `${DISCLAIMER_PHRASE}
 
-Hello! I'm the Next Leap advisor appointment assistant. I can help you:
+Hello — I'm the White Money Advisor scheduling assistant. Here's what I can help with:
 
-• **Book** a new consultation
-• **Reschedule** or **cancel** an existing booking
-• **Check availability** for a specific day
-• **Prepare** — tips on what to bring
+• Book a new consultation
+• Reschedule or cancel a booking
+• Check availability for a day you have in mind
+• Get ready — what to bring to your appointment
 
 What would you like to do?`;
 
@@ -86,7 +86,7 @@ export default function AgentPage() {
             {
               role: "assistant",
               content:
-                'Thank you for using Next Leap! Have a great day. Click "New conversation" below to start a fresh session.',
+                'Thanks for chatting with White Money Advisor. Have a great day. Click "New conversation" below to start a fresh session.',
             },
           ]);
           setChatEnded(true);
@@ -134,7 +134,7 @@ export default function AgentPage() {
         {
           role: "assistant",
           content:
-            'Thank you for using Next Leap! Have a great day. Click "New conversation" below to start a fresh session.',
+            'Thanks for chatting with White Money Advisor. Have a great day. Click "New conversation" below to start a fresh session.',
         },
       ]);
       setInput("");
@@ -227,7 +227,7 @@ export default function AgentPage() {
             color: "var(--accent)",
           }}
         >
-          Next Leap
+          White Money Advisor
         </div>
         <button
           type="button"
@@ -622,7 +622,7 @@ export default function AgentPage() {
                       void send();
                     }
                   }}
-                  placeholder="Message Next Leap…"
+                  placeholder="Message…"
                   rows={1}
                   disabled={loading || frozen}
                   style={{
@@ -712,7 +712,7 @@ export default function AgentPage() {
                 margin: "8px 0 0",
               }}
             >
-              Next Leap can make mistakes. Verify important scheduling details.
+              White Money Advisor can make mistakes. Verify important scheduling details.
             </p>
           </div>
         )}

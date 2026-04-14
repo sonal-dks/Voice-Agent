@@ -9,7 +9,10 @@ import {
   type SessionState,
 } from "./state";
 import { generateAssistantReply } from "./llm";
-import { tryConfirmOfferedSlotIfResolved } from "./toolHandlers";
+import {
+  tryConfirmCustomTimeOnOfferedDay,
+  tryConfirmOfferedSlotIfResolved,
+} from "./toolHandlers";
 
 const PII_RESPONSE = `${DISCLAIMER_PHRASE}
 
@@ -109,6 +112,7 @@ export async function processMessage(
 
   let assistant =
     (await tryConfirmOfferedSlotIfResolved(session, trimmed)) ??
+    (await tryConfirmCustomTimeOnOfferedDay(session, trimmed)) ??
     (await generateAssistantReply(session, historyBefore, trimmed));
 
   if (!session.disclaimerDelivered) {

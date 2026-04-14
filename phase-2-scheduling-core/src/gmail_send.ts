@@ -120,6 +120,39 @@ function gmailConfigErrorMessage(): string {
   );
 }
 
+/**
+ * Short hint for UI / logs when send fails — no secrets. Helps Vercel Preview vs Production mismatches.
+ */
+export function explainGmailEnvGap(): string {
+  const id = process.env.GMAIL_OAUTH_CLIENT_ID?.trim();
+  const sec = process.env.GMAIL_OAUTH_CLIENT_SECRET?.trim();
+  const rt = process.env.GMAIL_OAUTH_REFRESH_TOKEN?.trim();
+  const user = process.env.GMAIL_OAUTH_USER_EMAIL?.trim();
+  const del = process.env.GMAIL_DELEGATED_USER?.trim();
+  const sa = process.env.GOOGLE_SERVICE_ACCOUNT_JSON?.trim();
+
+  if (id && sec && rt) {
+    if (!user) {
+      return "Set GMAIL_OAUTH_USER_EMAIL to the same Gmail account you authorized (From: line). Redeploy after saving.";
+    }
+    return (
+      "Gmail OAuth keys look present. Regenerate the refresh token if needed (npm run gmail:oauth-token), " +
+      "and in Vercel attach every GMAIL_OAUTH_* variable to the same environment you are hitting (Production vs Preview)."
+    );
+  }
+  if (del && sa) {
+    return "Using Workspace delegation: verify GMAIL_DELEGATED_USER, GOOGLE_SERVICE_ACCOUNT_JSON, and domain-wide Gmail scopes.";
+  }
+  const missing: string[] = [];
+  if (!id) missing.push("GMAIL_OAUTH_CLIENT_ID");
+  if (!sec) missing.push("GMAIL_OAUTH_CLIENT_SECRET");
+  if (!rt) missing.push("GMAIL_OAUTH_REFRESH_TOKEN");
+  return (
+    `This deployment is missing: ${missing.join(", ")}. Add them in Vercel → Settings → Environment Variables for Production ` +
+    `(and Preview if you test there), then redeploy.`
+  );
+}
+
 /** Human-readable suffix for logs and API `email_errors` (no secrets). */
 export function formatGmailAuthFailure(err: unknown): string {
   const g = err as {

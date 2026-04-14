@@ -2,6 +2,7 @@
  * Shared scheduling tool implementations — same logic as MCP stdio server, but return plain JSON records.
  * Used in-process on Vercel (stdio MCP child processes are unreliable in serverless).
  */
+import { loadRepoRootEnv } from "../../lib/env/loadRepoRootEnv";
 import { schedulingEnvConfigured } from "../src/env";
 import { generateUniqueBookingCode } from "../src/booking_code";
 import {
@@ -13,6 +14,7 @@ import {
 } from "../src/google_calendar";
 import {
   createPlainTextDraft,
+  explainGmailEnvGap,
   formatGmailAuthFailure,
   getConfiguredGmailSenderEmail,
   sendPlainTextEmail,
@@ -577,6 +579,7 @@ export async function advisorSubmitPiiBooking(args: {
   phone: string;
   account?: string;
 }): Promise<Record<string, unknown>> {
+  loadRepoRootEnv();
   const {
     booking_code,
     secure_link_token,
@@ -719,10 +722,12 @@ export async function advisorSubmitPiiBooking(args: {
     parts.push("A confirmation email was sent to the address you provided.");
   if (advisor_email_sent) parts.push("The advisor team was notified by email.");
   if (email_errors.length > 0) {
-    const hint = email_errors[0] ?? "unknown";
-    parts.push(
-      `Email could not be sent: ${hint.slice(0, 400)}${hint.length > 400 ? "…" : ""}`
-    );
+    const raw = email_errors.join(" ").toLowerCase();
+    const hint =
+      raw.includes("not configured") || raw.includes("gmail_oauth")
+        ? explainGmailEnvGap()
+        : (email_errors[0] ?? "unknown").replace(/^user_email:\s*/i, "").slice(0, 280);
+    parts.push(`We could not send the confirmation email. ${hint}`);
   }
 
   return {

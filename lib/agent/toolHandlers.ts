@@ -1,3 +1,5 @@
+import { DateTime } from "luxon";
+
 import {
   callAdvisorMcpTool,
   schedulingCredentialsPresent,
@@ -5,6 +7,54 @@ import {
 } from "@/lib/mcp/schedulingMcpClient";
 import type { OfferedSlot } from "@/lib/mcp/schedulingTypes";
 import type { IntentKind, SessionState } from "./state";
+
+function getAdvisorTz(): string {
+  return process.env.ADVISOR_TIMEZONE?.trim() || "Asia/Kolkata";
+}
+
+function slotDurationMinutes(): number {
+  const n = parseInt(process.env.SLOT_DURATION_MINUTES || "30", 10);
+  return Number.isFinite(n) && n > 0 ? n : 30;
+}
+
+/**
+ * Parse a wall-clock time from natural text (used to match offered slots or book a custom window).
+ */
+function parseWallClockFromUserText(
+  text: string,
+  slots: OfferedSlot[]
+): { hour: number; minute: number } | null {
+  const t = text.trim();
+  const m12 = t.match(/\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i);
+  if (m12) {
+    let h = parseInt(m12[1], 10);
+    const minute = m12[2] ? parseInt(m12[2], 10) : 0;
+    const ap = m12[3].toLowerCase();
+    if (ap === "pm" && h < 12) h += 12;
+    if (ap === "am" && h === 12) h = 0;
+    return { hour: h, minute };
+  }
+  const mHm = t.match(/\b(\d{1,2}):(\d{2})\b/);
+  if (mHm) {
+    let h = parseInt(mHm[1], 10);
+    const minute = parseInt(mHm[2], 10);
+    const afternoonCue = /afternoon|evening|\bpm\b|after\s+noon/i.test(t);
+    const minHour =
+      slots.length > 0
+        ? Math.min(
+            ...slots.map((x) =>
+              DateTime.fromISO(x.startIso, { setZone: true })
+                .setZone(getAdvisorTz())
+                .hour
+            )
+          )
+        : 12;
+    const biasAfternoon = afternoonCue || minHour >= 12;
+    if (biasAfternoon && h >= 1 && h <= 11) h += 12;
+    return { hour: h, minute };
+  }
+  return null;
+}
 
 /** Never pass secure_link_token back to the LLM (logs / model context). */
 function redactSecureLinkTokenForLlm(
@@ -133,6 +183,18 @@ function resolveOfferedSlot(
     if (matches.length === 1) return matches[0];
   }
 
+  const wcSource = `${kd} ${dd} ${dispTrim} ${keyTrim}`;
+  const wc = parseWallClockFromUserText(wcSource, slots);
+  if (wc) {
+    const matches = slots.filter((x) => {
+      const dt = DateTime.fromISO(x.startIso, { setZone: true }).setZone(
+        getAdvisorTz()
+      );
+      return dt.hour === wc.hour && dt.minute === wc.minute;
+    });
+    if (matches.length === 1) return matches[0];
+  }
+
   const nd = norm(dd) || norm(kd) || norm(dispTrim) || norm(keyTrim);
   if (nd.length >= 4) {
     s = slots.find(
@@ -215,6 +277,72 @@ export async function tryConfirmOfferedSlotIfResolved(
     session
   );
 
+  return formatConfirmUserMessage(raw);
+}
+
+/**
+ * Book a time on the same calendar day as the last offered slots when the user names a time
+ * that is not one of the two samples (e.g.1:00 PM while offers were 12:00 / 12:30).
+ * Runs after tryConfirmOfferedSlotIfResolved so the LLM is not required for this path.
+ */
+export async function tryConfirmCustomTimeOnOfferedDay(
+  session: SessionState,
+  userText: string
+): Promise<string | null> {
+  const offered = session.offeredSlots;
+  if (!offered?.length || session.lastBookingCode) return null;
+  if (ABORT_SLOT_CHOICE.test(userText)) return null;
+
+  const cleaned = normalizeUserSlotChoice(userText.trim());
+  const wc = parseWallClockFromUserText(
+    `${cleaned} ${userText}`,
+    offered
+  );
+  if (!wc) return null;
+
+  const sameClock = offered.filter((x) => {
+    const dt = DateTime.fromISO(x.startIso, { setZone: true }).setZone(
+      getAdvisorTz()
+    );
+    return dt.hour === wc.hour && dt.minute === wc.minute;
+  });
+  if (sameClock.length === 1) {
+    const slot = sameClock[0];
+    const raw = await handleConfirmBooking(
+      {
+        topic: String(session.bookingTopic ?? ""),
+        selected_slot_key: slot.key,
+        selected_slot_display: slot.display,
+      },
+      session
+    );
+    return formatConfirmUserMessage(raw);
+  }
+  if (sameClock.length > 1) return null;
+
+  const anchor = DateTime.fromISO(offered[0].startIso, { setZone: true }).setZone(
+    getAdvisorTz()
+  );
+  if (!anchor.isValid) return null;
+
+  const localDay = anchor.startOf("day");
+  const start = localDay.set({
+    hour: wc.hour,
+    minute: wc.minute,
+    second: 0,
+    millisecond: 0,
+  });
+  const end = start.plus({ minutes: slotDurationMinutes() });
+
+  const raw = await handleConfirmBooking(
+    {
+      topic: String(session.bookingTopic ?? ""),
+      selected_slot_display: `${start.toFormat("ccc d LLL yyyy")}, ${start.toFormat("h:mm a")} IST`,
+      start_iso: start.toUTC().toISO()!,
+      end_iso: end.toUTC().toISO()!,
+    },
+    session
+  );
   return formatConfirmUserMessage(raw);
 }
 
@@ -407,12 +535,27 @@ export async function handleConfirmBooking(
     return redactSecureLinkTokenForLlm(raw);
   };
 
-  if (start_iso && end_iso) {
+  let startEff = start_iso;
+  let endEff = end_iso;
+  if (startEff && !endEff) {
+    const s = DateTime.fromISO(startEff, { setZone: true });
+    if (s.isValid) {
+      endEff = s.plus({ minutes: slotDurationMinutes() }).toUTC().toISO()!;
+    }
+  }
+
+  if (startEff && endEff) {
+    const tz = getAdvisorTz();
+    const slotDisp =
+      selected_slot_display ||
+      DateTime.fromISO(startEff, { setZone: true })
+        .setZone(tz)
+        .toFormat("ccc d LLL yyyy, h:mm a") + " IST";
     try {
       return await runConfirm({
-        slot_display: selected_slot_display || start_iso,
-        startIso: start_iso,
-        endIso: end_iso,
+        slot_display: slotDisp,
+        startIso: startEff,
+        endIso: endEff,
       });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
@@ -428,16 +571,14 @@ export async function handleConfirmBooking(
     selected_slot_display
   );
   if (!slot) {
+    const compact =
+      offered.length > 0
+        ? offered.map((x, i) => `${i + 1}. ${x.display}`).join("; ")
+        : "";
     const hint =
       offered.length > 0
-        ? `Offered slots (do not call offer_slots again unless user changes day/topic): ${JSON.stringify(
-            offered.map((x, i) => ({
-              list_number: i + 1,
-              key: x.key,
-              display: x.display,
-            }))
-          )}. Call confirm_booking with selected_slot_key set to the correct \`key\` for the user's choice, or if they want a different time on that day, use start_iso and end_iso (ISO 8601) plus selected_slot_display.`
-        : "No slots in session. Call offer_slots first, or use confirm_booking with start_iso and end_iso if the user specified an exact window.";
+        ? `No match for that time. Offered: ${compact}. For another time the same day, call confirm_booking with start_iso, end_iso (UTC, ${slotDurationMinutes()} min), and selected_slot_display.`
+        : "No slots in session. Call offer_slots first, or confirm_booking with start_iso and end_iso.";
     return {
       ok: false,
       error: "invalid_slot",

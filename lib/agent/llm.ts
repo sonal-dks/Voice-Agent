@@ -149,6 +149,14 @@ function userFacingLlmFailure(e: unknown): string {
   if (m.includes("tool_use_failed") || m.includes("tool call validation failed")) {
     return "The assistant hit a temporary formatting issue with the AI provider. Please send your message again. If it repeats, try another GROQ_MODEL in .env (e.g. llama-3.1-8b-instant).";
   }
+  if (
+    m.includes("context length") ||
+    m.includes("maximum context") ||
+    m.includes("token limit") ||
+    (m.includes("too long") && m.includes("context"))
+  ) {
+    return "That request was too long for one step. Please repeat your time in a short sentence (for example: “Book 1:00 PM tomorrow”).";
+  }
   return "I'm having trouble reaching the assistant right now. Please try again in a moment.";
 }
 

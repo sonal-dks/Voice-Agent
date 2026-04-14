@@ -17,6 +17,28 @@ export interface SttResult {
   durationSec: number;
 }
 
+function normalizeMimeType(raw: string): string {
+  const m = (raw || "").toLowerCase().trim();
+  if (!m) return "audio/webm";
+  if (m.includes("webm")) return "audio/webm";
+  if (m.includes("ogg")) return "audio/ogg";
+  if (m.includes("mpeg")) return "audio/mpeg";
+  if (m.includes("mp4") || m.includes("m4a")) return "audio/mp4";
+  return raw;
+}
+
+function fallbackMimeTypes(primary: string): string[] {
+  const p = normalizeMimeType(primary);
+  const candidates = [
+    p,
+    "audio/webm",
+    "audio/ogg",
+    "audio/mp4",
+    "application/octet-stream",
+  ];
+  return Array.from(new Set(candidates));
+}
+
 export async function transcribeAudio(
   audioBuffer: ArrayBuffer,
   mimeType: string
@@ -38,33 +60,47 @@ export async function transcribeAudio(
     detect_language: "false",
   });
 
-  const res = await fetch(`${DEEPGRAM_API}?${params}`, {
-    method: "POST",
-    headers: {
-      Authorization: `Token ${apiKey}`,
-      "Content-Type": mimeType || "audio/webm",
-    },
-    body: audioBuffer,
-  });
+  let lastError = "Unknown STT failure";
+  for (const contentType of fallbackMimeTypes(mimeType)) {
+    const res = await fetch(`${DEEPGRAM_API}?${params}`, {
+      method: "POST",
+      headers: {
+        Authorization: `Token ${apiKey}`,
+        "Content-Type": contentType,
+      },
+      body: audioBuffer,
+    });
 
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`Deepgram STT error ${res.status}: ${text}`);
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      lastError = `Deepgram STT error ${res.status}: ${text}`;
+      const lower = text.toLowerCase();
+      const retryableFormatError =
+        res.status === 400 &&
+        (lower.includes("unsupported") ||
+          lower.includes("corrupt") ||
+          lower.includes("failed to process audio"));
+      if (retryableFormatError) {
+        continue;
+      }
+      throw new Error(lastError);
+    }
+
+    const data = (await res.json()) as {
+      results?: {
+        channels?: Array<{
+          alternatives?: Array<{ transcript?: string; confidence?: number }>;
+        }>;
+        duration?: number;
+      };
+    };
+    const alt = data.results?.channels?.[0]?.alternatives?.[0];
+    return {
+      transcript: alt?.transcript?.trim() ?? "",
+      confidence: alt?.confidence ?? 0,
+      durationSec: data.results?.duration ?? 0,
+    };
   }
 
-  const data = (await res.json()) as {
-    results?: {
-      channels?: Array<{
-        alternatives?: Array<{ transcript?: string; confidence?: number }>;
-      }>;
-      duration?: number;
-    };
-  };
-
-  const alt = data.results?.channels?.[0]?.alternatives?.[0];
-  return {
-    transcript: alt?.transcript?.trim() ?? "",
-    confidence: alt?.confidence ?? 0,
-    durationSec: data.results?.duration ?? 0,
-  };
+  throw new Error(lastError);
 }

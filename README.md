@@ -1,155 +1,142 @@
-# Advisor Appointment Scheduler (Voice Agent)
+# White Money Advisor Voice Agent
 
-> A Next.js app that chats with users to help them book advisor consultation slots. It uses an AI ([Groq](https://groq.com/)) for conversation, optional Google Calendar and Sheets for real scheduling, and a planned path to browser voice later.
+An AI assistant that helps users book, reschedule, or cancel advisor appointments through a simple chat/voice experience.
 
-**Who it’s for:** Developers and learners following the **Next Leap** voice-agent milestone; anyone who wants a working example of a guarded LLM chat plus optional MCP-backed scheduling.
+This README starts with plain-language product flow, then covers setup and technical details.
 
-Design details, phases, and ADRs: [Docs/architecture.md](./Docs/architecture.md) (see §14).
+## What This Project Does (Simple Version)
 
-## What is this?
+Think of it like a smart scheduling receptionist:
 
-Imagine a friend opens a website and types to an assistant instead of calling a call center. The assistant figures out whether they want a new booking, a reschedule, or something else, stays within rules (no investment advice, no collecting sensitive personal details in the chat), and can offer real calendar slots when Google is connected. After a booking, a **separate** page collects contact information safely so private data is not mixed into the open-ended AI conversation.
+- A user opens the app and talks/types to the assistant.
+- The assistant asks what they need (new booking, reschedule, cancel, or availability).
+- It offers available slots and confirms one.
+- It gives a booking code.
+- Contact details are collected in a separate form after booking (safer than asking in chat).
 
-This repository is **Next Leap — Milestone 3** coursework; the architecture doc above is the source of truth for how pieces fit together.
+## User Flow (End-to-End)
 
-## Features
+1. User opens `/agent` and sees/hears a greeting.
+2. User says what they want (for example, "book an appointment").
+3. Assistant asks for:
+   - topic
+   - date
+   - time preference
+4. Assistant offers slots from the connected calendar.
+5. User picks a slot (or asks for another time on that day).
+6. Assistant confirms the booking and returns a booking code.
+7. User clicks **Submit contact details** (separate flow).
+8. System stores details securely and sends email updates (when configured).
 
-- Text chat agent at `/agent` — powered by Groq (OpenAI-compatible API); a small **offline** mode works without an API key for local smoke tests.
-- Conversation engine — intents, topic and time preference, disclaimer on the first assistant reply, PII and advice guardrails.
-- Optional live scheduling (Phase 2) — an MCP server talks to Google Calendar and Sheets; the Next.js app uses an MCP client only (no `googleapis` in the web app for those flows).
-- Post-call PII (Phase 3) — booking code plus secure link; form and APIs live under `app/booking/` and `phase-3-post-call-pii/`.
+## Why It Is Built This Way
 
-## Built With
+- Keeps conversation natural and fast.
+- Keeps personal details out of free-form chat.
+- Keeps scheduling side-effects (calendar/sheets/email) behind structured tools.
+- Works in phases: first stable text flow, then voice, then more integrations.
 
-- [Next.js 14](https://nextjs.org/) — UI and API routes (App Router)
-- [Groq](https://console.groq.com/) — LLM inference via the [OpenAI Node SDK](https://github.com/openai/openai-node) with `baseURL` set to Groq’s API
-- [Model Context Protocol](https://modelcontextprotocol.io/) — `@modelcontextprotocol/sdk` for the scheduling server
-- [TypeScript](https://www.typescriptlang.org/) and [Zod](https://zod.dev/) — types and validation
+## Quick Start (Beginner Friendly)
 
-## Getting Started
-
-These instructions help you run a copy of this project on your own computer.
-
-### Prerequisites
-
-You need **[Node.js](https://nodejs.org/) version 18 or higher** (version 20 LTS is a good default). Node includes `npm`, which installs JavaScript dependencies.
-
-Check that Node is installed and see the version number:
+### 1) Install
 
 ```bash
-node --version
+git clone https://github.com/sonal-dks/Voice-Agent.git
+cd Voice-Agent
+npm install
+cp .env.example .env
 ```
 
-You also need a **[Groq API key](https://console.groq.com/keys)** for full AI responses. The app can still start without it using a limited offline stub.
+### 2) Add minimum env
 
-### Installation
+At minimum, add in `.env`:
 
-Follow these steps in order. Each step uses the terminal: the **repository root** is the folder that contains `package.json` (after you clone, that folder is named `Voice-Agent`).
+- `GROQ_API_KEY`
+- `DEEPGRAM_API_KEY`
 
-1. **Clone the repository** — downloads the project from GitHub and creates a local folder.
+Optional but common:
 
-   ```bash
-   git clone https://github.com/sonal-dks/Voice-Agent.git
-   cd Voice-Agent
-   ```
+- `GROQ_MODEL`
+- `DEEPGRAM_TTS_MODEL`
 
-2. **Install dependencies** — `npm` reads `package.json` and downloads packages into `node_modules/`.
+For real scheduling and email, also add `GOOGLE_*` and `GMAIL_*` variables (see technical docs below).
 
-   ```bash
-   npm install
-   ```
+### 3) Run
 
-3. **Set up environment variables** — copy the example file to `.env`. Next.js loads `.env` from the repo root (see `next.config.mjs`).
+```bash
+npm run dev
+```
 
-   ```bash
-   cp .env.example .env
-   ```
+Open:
 
-   Open `.env` in a text editor. Add at least:
+- `http://localhost:3000/agent`
 
-   - **`GROQ_API_KEY`** — create a key in the [Groq Console](https://console.groq.com/keys). Without it, the chat uses an offline stub.
-   - **`GROQ_MODEL`** — optional; defaults are documented in `.env.example`.
-
-   For **live Calendar and Sheets** (Phase 2), add the `GOOGLE_*` variables described in [phase-2-scheduling-core/README.md](./phase-2-scheduling-core/README.md).
-
-4. **Run the development server** — starts the Next.js dev server with hot reload.
-
-   ```bash
-   npm run dev
-   ```
-
-5. **Open the app in your browser** — the dev server listens on port 3000 by default.
-
-   - Home: [http://localhost:3000](http://localhost:3000)
-   - Chat agent: [http://localhost:3000/agent](http://localhost:3000/agent)
-
-6. **(Optional) Run the Phase 1 smoke test** — with `npm run dev` still running, open a second terminal in the same repo root. This script checks that the health and message endpoints respond.
-
-   ```bash
-   npm run test:phase1
-   ```
-
-### Production build
-
-To build and run like production (after `npm run build`, `next start` serves the optimized app):
+### 4) Build check
 
 ```bash
 npm run build
-npm start
 ```
 
-## How to Use
+## What You Can Test Immediately
 
-1. Go to **`/agent`**, type messages, and keep using the same chat **session** so follow-up turns make sense — the UI stores `sessionId` returned by the API.
-2. Check that the server is up: open or request **`GET /api/health`** — you should get JSON with a healthy status.
+- Voice/chat greeting and first-turn disclaimer
+- Topic/date/time collection
+- Slot offer and confirm flow
+- Booking code generation
+- Post-booking contact details modal
 
-Example health check from a terminal (with the dev server running):
+## Tech Stack (Technical Section)
 
-```bash
-curl -s http://localhost:3000/api/health
-```
+- **Frontend + API:** Next.js 14 (App Router)
+- **LLM:** Groq via OpenAI-compatible SDK
+- **Voice STT + TTS:** Deepgram (single provider)
+- **Scheduling tools:** MCP (`@modelcontextprotocol/sdk`)
+- **Data/validation:** TypeScript + Zod
+- **Optional integrations:** Google Calendar, Google Sheets, Gmail
+
+## Main Routes
+
+- `GET /agent` - main assistant UI
+- `POST /api/agent/message` - text conversation turn
+- `POST /api/agent/stream` - voice turn (STT -> agent -> TTS)
+- `POST /api/agent/tts` - greeting TTS helper
+- `POST /api/booking/[code]/submit` - post-booking contact details submit
+- `GET /api/health` - health endpoint
 
 ## Project Structure
 
-```
+```text
 Voice-Agent/
-├── app/                     # Pages and Route Handlers
-│   ├── agent/               # Chat UI
-│   ├── booking/             # PII flow (Phase 3)
-│   └── api/                 # e.g. POST /api/agent/message
-├── lib/                     # Agent engine, MCP client, env helpers
-├── Docs/                    # architecture.md, low-level-architecture.md
-├── phase-1-text-agent/      # Phase 1 docs (tests, evals, outputs)
-├── phase-2-scheduling-core/ # MCP server + Google integration
-├── phase-3-post-call-pii/   # PII libraries and form
-├── .env.example             # Copy to .env — do not commit real secrets
-└── package.json
+|- app/
+|  |- agent/                  # Chat + voice UI
+|  |- booking/                # Post-booking details flow
+|  `- api/                    # Route handlers
+|- lib/                       # Agent engine, voice, MCP client, helpers
+|- phase-1-text-agent/        # Phase docs and eval artifacts
+|- phase-2-scheduling-core/   # MCP scheduling + Google integrations
+|- phase-3-post-call-pii/     # PII form + submit libraries
+|- Docs/                      # Architecture docs
+|- .env.example
+`- package.json
 ```
 
-## Documentation map
+## Documentation Map
 
-| Topic | Document |
-|--------|-----------|
-| Phases and ADRs | [Docs/architecture.md](./Docs/architecture.md) |
-| Env vars, file layout, deploy | [Docs/low-level-architecture.md](./Docs/low-level-architecture.md) |
-| Phase 1 “done” criteria | [phase-1-text-agent/outputs.md](./phase-1-text-agent/outputs.md) |
-| Scheduling / MCP | [phase-2-scheduling-core/README.md](./phase-2-scheduling-core/README.md) |
-| Post-call PII | [phase-3-post-call-pii/README.md](./phase-3-post-call-pii/README.md) |
+- Product + architecture: `Docs/architecture.md`
+- Low-level design + env registry: `Docs/low-level-architecture.md`
+- Scheduling/MCP details: `phase-2-scheduling-core/README.md`
+- Post-call details flow: `phase-3-post-call-pii/README.md`
 
 ## Contributing
 
-Contributions are welcome.
-
-1. Fork the repository on GitHub.
-2. Create a branch: `git checkout -b feature/your-feature`
-3. Commit your changes: `git commit -m "Describe your change"`
-4. Push the branch: `git push origin feature/your-feature`
-5. Open a Pull Request against the `main` branch.
+1. Fork the repo
+2. Create a branch
+3. Make changes
+4. Open a pull request to `main`
 
 ## License
 
-This repository does not include a `LICENSE` file yet. When you publish how others may use the code, add a license file (for example MIT or Apache-2.0) at the repo root and update this section to link to it.
+No license file is included yet. Add one (MIT/Apache-2.0/etc.) before broader reuse.
 
-## Questions?
+## Questions
 
-Have a question? [Open an issue](https://github.com/sonal-dks/Voice-Agent/issues).
+Open an issue: <https://github.com/sonal-dks/Voice-Agent/issues>

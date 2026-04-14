@@ -216,12 +216,13 @@ const ABORT_SLOT_CHOICE =
 
 export function formatConfirmUserMessage(raw: Record<string, unknown>): string {
   if (raw.ok === true) {
-    const m = String(raw.message ?? "Your booking is confirmed.");
     const code = raw.booking_code != null ? String(raw.booking_code) : "";
-    if (code.length > 0 && !m.includes(code)) {
-      return `${m}\n\nBooking code: ${code}`;
-    }
-    return m;
+    const slot = raw.slot_display != null ? String(raw.slot_display) : "";
+    const base = code
+      ? `Your booking is confirmed. Booking code: ${code}.`
+      : "Your booking is confirmed.";
+    const slotPart = slot ? ` Scheduled time: ${slot}.` : "";
+    return `${base}${slotPart} A contact-details form is on this page whenever you're ready. Is there anything else I can help with?`;
   }
   return String(
     raw.message ?? raw.error ?? "Could not complete the booking. Please try again."
@@ -527,9 +528,23 @@ export async function handleConfirmBooking(
 
     if (raw.ok === true) {
       const safe = redactSecureLinkTokenForLlm(raw);
+      if (safe.advisor_gmail_draft === "failed") {
+        console.warn(
+          "[toolHandlers] Booking confirmed but advisor Gmail draft failed. Check Gmail OAuth/delegation envs."
+        );
+      }
+      const bookingCode =
+        safe.booking_code != null ? String(safe.booking_code) : "";
+      const slot =
+        typeof safe.slot_display === "string"
+          ? safe.slot_display
+          : payload.slot_display;
+      const userMsg = bookingCode
+        ? `Your booking is confirmed. Booking code: ${bookingCode}.${slot ? ` Scheduled time: ${slot}.` : ""}`
+        : `Your booking is confirmed.${slot ? ` Scheduled time: ${slot}.` : ""}`;
       return {
         ...safe,
-        message: `${String(safe.message ?? "Booking confirmed.")}${linkHint}`,
+        message: `${userMsg}${linkHint}`,
       };
     }
     return redactSecureLinkTokenForLlm(raw);

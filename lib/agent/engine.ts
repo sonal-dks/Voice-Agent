@@ -48,8 +48,25 @@ function toDto(s: SessionState): MessageDTO[] {
 
 function stripRepeatedDisclaimer(text: string): string {
   const escaped = DISCLAIMER_PHRASE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const re = new RegExp(`^\\s*${escaped}[\\s:—-]*`, "i");
-  return text.replace(re, "").trim();
+  const re = new RegExp(`(?:^|\\n)\\s*${escaped}[\\s:—-]*`, "gi");
+  return text.replace(re, "\n").trim();
+}
+
+function normalizeLeadingDisclaimer(text: string): string {
+  const escaped = DISCLAIMER_PHRASE.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const re = new RegExp(`^\\s*(?:${escaped}[\\s:—-]*)+`, "i");
+  if (!re.test(text)) return text.trim();
+  const rest = text.replace(re, "").trim();
+  return rest ? `${DISCLAIMER_PHRASE}\n\n${rest}` : DISCLAIMER_PHRASE;
+}
+
+function stripRepeatedGreetingIntro(text: string): string {
+  return text
+    .replace(
+      /^\s*hello\s*[—,-]?\s*i['’]m\s+the\s+white\s+money\s+advisor\s+scheduling\s+assistant[\s\S]*?what\s+would\s+you\s+like\s+to\s+do\?\s*/i,
+      ""
+    )
+    .trim();
 }
 
 /**
@@ -122,12 +139,14 @@ export async function processMessage(
     (await generateAssistantReply(session, historyBefore, trimmed));
 
   if (!session.disclaimerDelivered) {
+    assistant = normalizeLeadingDisclaimer(assistant);
     if (!assistant.includes(DISCLAIMER_PHRASE)) {
       assistant = `${DISCLAIMER_PHRASE}\n\n${assistant}`;
     }
     session.disclaimerDelivered = true;
   } else {
     assistant = stripRepeatedDisclaimer(assistant);
+    assistant = stripRepeatedGreetingIntro(assistant);
     if (!assistant) {
       assistant = "How can I help you with booking, rescheduling, cancellation, or availability?";
     }

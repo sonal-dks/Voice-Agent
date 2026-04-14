@@ -39,7 +39,10 @@ export default function AgentPage() {
   const [mode, setMode] = useState<"chat" | "voice">("voice");
   const [isGreetingSpeaking, setIsGreetingSpeaking] = useState(false);
   const hasPlayedVoiceGreetingRef = useRef(false);
+  const hasAttemptedVoiceGreetingRef = useRef(false);
   const pendingVoiceGreetingRef = useRef(false);
+  const greetingAudioRef = useRef<HTMLAudioElement | null>(null);
+  const greetingAudioUrlRef = useRef<string | null>(null);
 
   /* ── Auto-scroll ────────────────────────────────────────────────── */
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -50,44 +53,78 @@ export default function AgentPage() {
     });
   }, [lines, loading]);
 
-  const trySpeakVoiceGreeting = useCallback(() => {
+  const trySpeakVoiceGreeting = useCallback(async () => {
     if (mode !== "voice" || chatEnded) return false;
+    if (hasAttemptedVoiceGreetingRef.current) return hasPlayedVoiceGreetingRef.current;
     if (hasPlayedVoiceGreetingRef.current || pendingVoiceGreetingRef.current) return true;
     if (lines.length !== 1 || lines[0]?.role !== "assistant") return false;
-    if (typeof window === "undefined" || !("speechSynthesis" in window)) return false;
+    if (typeof window === "undefined") return false;
 
+    hasAttemptedVoiceGreetingRef.current = true;
     pendingVoiceGreetingRef.current = true;
-    const utter = new SpeechSynthesisUtterance(lines[0].content);
-    utter.rate = 1;
-    utter.pitch = 1;
-    utter.onstart = () => {
-      hasPlayedVoiceGreetingRef.current = true;
-      pendingVoiceGreetingRef.current = false;
-      setIsGreetingSpeaking(true);
-    };
-    utter.onend = () => {
+
+    try {
+      const res = await fetch("/api/agent/tts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: lines[0].content }),
+      });
+      if (!res.ok) throw new Error("greeting_tts_failed");
+      const data = (await res.json()) as { data?: string };
+      if (!data.data) throw new Error("greeting_audio_missing");
+
+      const bin = atob(data.data);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      const blob = new Blob([bytes], { type: "audio/mpeg" });
+      const url = URL.createObjectURL(blob);
+
+      if (greetingAudioRef.current) {
+        greetingAudioRef.current.pause();
+        greetingAudioRef.current.src = "";
+      }
+      if (greetingAudioUrlRef.current) {
+        URL.revokeObjectURL(greetingAudioUrlRef.current);
+      }
+
+      const audio = new Audio(url);
+      greetingAudioRef.current = audio;
+      greetingAudioUrlRef.current = url;
+
+      audio.onplay = () => {
+        hasPlayedVoiceGreetingRef.current = true;
+        pendingVoiceGreetingRef.current = false;
+        setIsGreetingSpeaking(true);
+      };
+      audio.onended = () => {
+        pendingVoiceGreetingRef.current = false;
+        setIsGreetingSpeaking(false);
+      };
+      audio.onerror = () => {
+        pendingVoiceGreetingRef.current = false;
+        setIsGreetingSpeaking(false);
+      };
+
+      await audio.play();
+      return true;
+    } catch {
       pendingVoiceGreetingRef.current = false;
       setIsGreetingSpeaking(false);
-    };
-    utter.onerror = () => {
-      pendingVoiceGreetingRef.current = false;
-      setIsGreetingSpeaking(false);
-    };
-    window.speechSynthesis.cancel();
-    window.speechSynthesis.speak(utter);
-    return true;
+      return false;
+    }
   }, [mode, chatEnded, lines]);
 
   /* ── Voice greeting on first voice session (with gesture fallback) ── */
   useEffect(() => {
     if (mode !== "voice" || chatEnded || hasPlayedVoiceGreetingRef.current) return;
+    if (hasAttemptedVoiceGreetingRef.current) return;
 
     // Try immediately; if blocked by autoplay policy, retry on first user gesture.
-    trySpeakVoiceGreeting();
+    void trySpeakVoiceGreeting();
 
     const onFirstGesture = () => {
       if (hasPlayedVoiceGreetingRef.current) return;
-      trySpeakVoiceGreeting();
+      void trySpeakVoiceGreeting();
     };
 
     window.addEventListener("pointerdown", onFirstGesture, { once: true });
@@ -96,7 +133,14 @@ export default function AgentPage() {
     return () => {
       window.removeEventListener("pointerdown", onFirstGesture);
       window.removeEventListener("keydown", onFirstGesture);
-      window.speechSynthesis.cancel();
+      if (greetingAudioRef.current) {
+        greetingAudioRef.current.pause();
+        greetingAudioRef.current.src = "";
+      }
+      if (greetingAudioUrlRef.current) {
+        URL.revokeObjectURL(greetingAudioUrlRef.current);
+        greetingAudioUrlRef.current = null;
+      }
       setIsGreetingSpeaking(false);
     };
   }, [mode, chatEnded, trySpeakVoiceGreeting]);
@@ -155,6 +199,15 @@ export default function AgentPage() {
   const startNewSession = useCallback(() => {
     voice.cancelRecording();
     voice.stopPlayback();
+    if (greetingAudioRef.current) {
+      greetingAudioRef.current.pause();
+      greetingAudioRef.current.src = "";
+      greetingAudioRef.current = null;
+    }
+    if (greetingAudioUrlRef.current) {
+      URL.revokeObjectURL(greetingAudioUrlRef.current);
+      greetingAudioUrlRef.current = null;
+    }
     setSessionId(null);
     setLines([{ role: "assistant", content: OPENING }]);
     setInput("");
@@ -169,6 +222,7 @@ export default function AgentPage() {
     setChatEnded(false);
     setIsGreetingSpeaking(false);
     hasPlayedVoiceGreetingRef.current = false;
+    hasAttemptedVoiceGreetingRef.current = false;
     pendingVoiceGreetingRef.current = false;
   }, [voice]);
 

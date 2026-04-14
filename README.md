@@ -1,8 +1,10 @@
 # White Money Advisor Voice Agent
 
-An AI assistant that helps users book, reschedule, or cancel advisor appointments through a simple chat/voice experience.
+An AI assistant that helps users book, reschedule, or cancel advisor
+appointments through a simple chat/voice experience.
 
-This README starts with plain-language product flow, then covers setup and technical details.
+This README starts with plain-language product flow, then covers setup and
+technical details.
 
 ## What This Project Does (Simple Version)
 
@@ -12,7 +14,8 @@ Think of it like a smart scheduling receptionist:
 - The assistant asks what they need (new booking, reschedule, cancel, or availability).
 - It offers available slots and confirms one.
 - It gives a booking code.
-- Contact details are collected in a separate form after booking (safer than asking in chat).
+- Contact details are collected in a separate form after booking
+  (safer than asking in chat).
 
 ## User Flow (End-to-End)
 
@@ -58,7 +61,8 @@ Optional but common:
 - `GROQ_MODEL`
 - `DEEPGRAM_TTS_MODEL`
 
-For real scheduling and email, also add `GOOGLE_*` and `GMAIL_*` variables (see technical docs below).
+For real scheduling and email, also add `GOOGLE_*` and `GMAIL_*` variables
+(see technical docs below).
 
 ### 3) Run
 
